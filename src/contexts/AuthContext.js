@@ -1,0 +1,32 @@
+import React, { createContext, useState, useContext } from 'react';
+import AuthService from '../services/AuthService';
+
+const AuthContext = createContext();
+
+export function AuthProvider({ children }) {
+    const [user, setUser] = useState(null);
+    const [isLoading, setIsLoading] = useState(false);
+
+    const login = async (username, password) => {
+        setIsLoading(true);
+        const result = await AuthService.login(username, password);
+        if (result.success) {
+            setUser(result.data);
+        }
+        setIsLoading(false);
+        return result;
+    };
+
+    const logout = async () => {
+        await AuthService.logout();
+        setUser(null);
+    };
+
+    return (
+        <AuthContext.Provider value={{ user, login, logout, isLoading }}>
+            {children}
+        </AuthContext.Provider>
+    );
+}
+
+export const useAuth = () => useContext(AuthContext);
