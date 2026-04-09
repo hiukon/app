@@ -14,7 +14,7 @@ export const USE_MOCK_DATA = envBool(process.env.EXPO_PUBLIC_USE_MOCK_DATA, true
  * Chat qua Agent API (SSE) theo tài liệu Seinetime — cần Bearer token (apiClient).
  * Khi false: chat dùng mock / DataService như cũ.
  */
-export const USE_AGENT_CHAT = envBool(process.env.EXPO_PUBLIC_USE_AGENT_CHAT, false);
+export const USE_AGENT_CHAT = envBool(process.env.EXPO_PUBLIC_USE_AGENT_CHAT, true);
 
 /** Agent: conversations, messages SSE, artifacts, citations (§3, §4) */
 export const AGENT_API_URL =

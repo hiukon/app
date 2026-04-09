@@ -17,9 +17,10 @@ export function createSseParser() {
             const events = [];
             for (const raw of lines) {
                 const line = raw.trim();
-                if (!line || line === 'data: [DONE]') continue;
-                if (line.startsWith('data: ')) {
-                    const jsonStr = line.slice(6);
+                if (!line) continue;
+                if (line === 'data: [DONE]' || line === 'data:[DONE]') continue;
+                if (line.startsWith('data:')) {
+                    const jsonStr = line.slice(5).trimStart();
                     try {
                         events.push(JSON.parse(jsonStr));
                     } catch {

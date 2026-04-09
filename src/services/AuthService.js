@@ -1,6 +1,6 @@
 import apiClient from './api/apiClient';
 
-import { CORE_API_URL, CORE_AUTH_PATHS } from '../config/api.config';
+import { CORE_API_URL, CORE_AUTH_PATHS, USE_MOCK_AUTH } from '../config/api.config';
 
 
 

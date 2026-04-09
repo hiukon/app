@@ -1,10 +1,20 @@
+let localMessageSeq = 0;
+
+function genMessageId() {
+    localMessageSeq += 1;
+    const t = Date.now().toString(36);
+    const s = localMessageSeq.toString(36);
+    return `msg-${t}-${s}`;
+}
+
 class MessageModel {
     constructor(data) {
-        this.id = data.id || Date.now().toString();
+        this.id = data.id || genMessageId();
         this.text = data.text;
         this.isUser = data.isUser || false;
         this.timestamp = data.timestamp || new Date();
         this.status = data.status || 'sent';
+        this.meta = data.meta || null;
     }
 
     toJSON() {
@@ -13,7 +23,8 @@ class MessageModel {
             text: this.text,
             isUser: this.isUser,
             timestamp: this.timestamp,
-            status: this.status
+            status: this.status,
+            meta: this.meta,
         };
     }
 }
@@ -34,6 +45,10 @@ class ChatModel {
         const msg = this.messages.find((m) => m.id === id);
         if (!msg) return;
         Object.assign(msg, patch);
+    }
+
+    removeMessage(id) {
+        this.messages = this.messages.filter((m) => m.id !== id);
     }
 
     getMessages() {

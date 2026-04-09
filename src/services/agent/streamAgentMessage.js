@@ -77,7 +77,10 @@ export function streamAgentMessage({
                 } catch {
                     if (full) msg = full.slice(0, 200);
                 }
-                finish(new Error(msg));
+                const err = new Error(msg);
+                err.status = xhr.status;
+                err.body = full;
+                finish(err);
                 return;
             }
             try {
@@ -92,7 +95,9 @@ export function streamAgentMessage({
         xhr.onerror = () => {
             if (signal) signal.removeEventListener('abort', onAbort);
             if (aborted) return;
-            finish(new Error('Network error'));
+            const err = new Error(`Network request failed: ${url}`);
+            err.status = xhr.status || 0;
+            finish(err);
         };
 
         xhr.send(JSON.stringify(body));

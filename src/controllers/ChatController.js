@@ -4,6 +4,14 @@ import { USE_AGENT_CHAT, AGENT_API_URL, AGENT_CODE } from '../config/api.config'
 import apiClient from '../services/api/apiClient';
 import { streamAgentMessage } from '../services/agent/streamAgentMessage';
 import { mapSnapshotToChatRows } from '../services/agent/snapshotMessages';
+import AgentApiService from '../services/agent/AgentApiService';
+import AuthService from '../services/AuthService';
+
+function isLikelyAuthFailure(status, msg) {
+    if (status === 401 || status === 403) return true;
+    const t = `${msg || ''}`.toLowerCase();
+    return /unauthoriz|token|expired|invalid|hết hạn|jwt|bearer/i.test(t);
+}
 
 function randomUuid() {
     if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
@@ -14,6 +22,35 @@ function randomUuid() {
     });
 }
 
+function readEventText(ev) {
+    return (
+        ev?.delta ??
+        ev?.text ??
+        ev?.content ??
+        ev?.result ??
+        ev?.data?.delta ??
+        ev?.data?.text ??
+        ev?.data?.content ??
+        ev?.data?.result ??
+        ev?.data?.message ??
+        ''
+    );
+}
+
+function resolvedAgentCode() {
+    return AGENT_CODE || 'default';
+}
+
+function defaultViewingContext() {
+    return {
+        viewing: {
+            type: 'canvas',
+            object: 'active session',
+            context: 'empty',
+        },
+    };
+}
+
 class ChatController {
     constructor() {
         this.chatModel = new ChatModel();
@@ -22,6 +59,34 @@ class ChatController {
         this.runId = null;
         this.pendingInterrupt = null;
         this._streamAbort = null;
+        this._epoch = 0;
+        this._lastEventAt = 0;
+        this._watchdogTimer = null;
+        this._runActive = false;
+        this._toolCalls = new Map(); // tool_call_id -> { id,name,argsText,resultText,is_error }
+        this._currentAssistantId = null;
+    }
+
+    _cleanupEmptyStreamingAssistants() {
+        const rows = this.chatModel.getMessages();
+        const removeIds = rows
+            .filter((m) => !m.isUser && m.status === 'streaming' && !`${m.text || ''}`.trim())
+            .map((m) => m.id);
+        removeIds.forEach((id) => this.chatModel.removeMessage(id));
+        if (this._currentAssistantId && removeIds.includes(this._currentAssistantId)) {
+            this._currentAssistantId = null;
+        }
+    }
+
+    _ensureStreamingPlaceholder() {
+        if (this._currentAssistantId) return this._currentAssistantId;
+        const model = this.chatModel.addMessage({
+            text: '',
+            isUser: false,
+            status: 'streaming',
+        });
+        this._currentAssistantId = model.id;
+        return model.id;
     }
 
     ensureWelcomeMessage() {
@@ -35,6 +100,159 @@ class ChatController {
 
     _agentBaseUrl() {
         return (AGENT_API_URL || '').replace(/\/$/, '');
+    }
+
+    _bumpEpoch() {
+        this._epoch += 1;
+        return this._epoch;
+    }
+
+    _touchEvent() {
+        this._lastEventAt = Date.now();
+    }
+
+    _clearWatchdog() {
+        if (this._watchdogTimer) {
+            clearInterval(this._watchdogTimer);
+            this._watchdogTimer = null;
+        }
+    }
+
+    _startWatchdog(epoch, onReconnect) {
+        this._clearWatchdog();
+        this._watchdogTimer = setInterval(() => {
+            if (this._epoch !== epoch) return;
+            if (!this._runActive) return;
+            if (!this._lastEventAt) return;
+            if (Date.now() - this._lastEventAt <= 60_000) return;
+            onReconnect?.();
+        }, 5_000);
+    }
+
+    async _sleep(ms) {
+        return new Promise((r) => setTimeout(r, ms));
+    }
+
+    async _reconnectWithBackoff(epoch, onMessagesUpdate) {
+        if (!USE_AGENT_CHAT) return;
+        if (!this.conversationId) return;
+        if (this._epoch !== epoch) return;
+        if (!this._runActive) return;
+
+        const token = apiClient.getAuthToken();
+        if (!token) return;
+
+        let attempt = 0;
+        const maxAttempts = 10;
+
+        while (attempt < maxAttempts) {
+            if (this._epoch !== epoch) return;
+            if (!this._runActive) return;
+            const delay = Math.min(500 * 2 ** attempt, 30_000);
+            await this._sleep(delay);
+            if (this._epoch !== epoch) return;
+            if (!this._runActive) return;
+
+            try {
+                await this._streamAgent({
+                    epoch,
+                    token,
+                    body: this._buildJoinBody(),
+                    onMessagesUpdate,
+                    allowReconnect: false,
+                    onSnapshot: (list) => {
+                        const rows = mapSnapshotToChatRows(list);
+                        this.chatModel.clearMessages();
+                        rows.forEach((r) => this.chatModel.addMessage(r));
+                        onMessagesUpdate?.();
+                    },
+                });
+                return;
+            } catch {
+                attempt += 1;
+            }
+        }
+    }
+
+    _buildJoinBody() {
+        const body = {
+            agent: resolvedAgentCode(),
+            agent_type: 'single',
+            conversation_id: this.conversationId,
+            message_id: randomUuid(),
+            user_time_zone:
+                Intl.DateTimeFormat?.().resolvedOptions?.().timeZone || 'Asia/Ho_Chi_Minh',
+        };
+        return body;
+    }
+
+    async _streamAgent({
+        epoch,
+        token,
+        body,
+        onMessagesUpdate,
+        allowReconnect,
+        onSnapshot,
+        onBeforeEvent,
+        onAfterEvent,
+    }) {
+        if (this._streamAbort) this._streamAbort.abort();
+        const ac = new AbortController();
+        this._streamAbort = ac;
+
+        this._touchEvent();
+        this._startWatchdog(epoch, () => {
+            if (this._streamAbort) this._streamAbort.abort();
+            this._reconnectWithBackoff(epoch, onMessagesUpdate);
+        });
+
+        try {
+            await streamAgentMessage({
+                url: `${this._agentBaseUrl()}/api/v1/messages`,
+                token,
+                body,
+                signal: ac.signal,
+                onEvent: (ev) => {
+                    if (this._epoch !== epoch) return;
+                    this._touchEvent();
+                    onBeforeEvent?.(ev);
+                    this._handleAgentEvent(ev, {
+                        onMessagesUpdate,
+                        onSnapshot,
+                    });
+                    onAfterEvent?.(ev);
+                },
+            });
+        } catch (e) {
+            if (e.message === 'Aborted') throw e;
+            if (isLikelyAuthFailure(e.status, e.message)) {
+                const refreshed = await AuthService.refreshAccessToken();
+                if (refreshed.success) {
+                    const nextToken = apiClient.getAuthToken();
+                    if (nextToken) {
+                        await this._streamAgent({
+                            epoch,
+                            token: nextToken,
+                            body,
+                            onMessagesUpdate,
+                            allowReconnect,
+                            onSnapshot,
+                            onBeforeEvent,
+                            onAfterEvent,
+                        });
+                        return;
+                    }
+                }
+            }
+            if (allowReconnect && this._epoch === epoch && this._runActive && this.conversationId) {
+                await this._reconnectWithBackoff(epoch, onMessagesUpdate);
+                return;
+            }
+            throw e;
+        } finally {
+            if (this._epoch === epoch) this._clearWatchdog();
+            this._streamAbort = null;
+        }
     }
 
     /**
@@ -51,99 +269,226 @@ class ChatController {
             return { messages: this.chatModel.getMessages(), error: 'Chưa có conversation_id.' };
         }
 
-        const ref = { assistantId: null, buffer: '' };
-
-        const body = {
-            conversation_id: this.conversationId,
-            message_id: randomUuid(),
-            user_time_zone:
-                Intl.DateTimeFormat?.().resolvedOptions?.().timeZone || 'Asia/Ho_Chi_Minh',
-        };
-        if (AGENT_CODE) body.agent = AGENT_CODE;
-
-        if (this._streamAbort) this._streamAbort.abort();
-        const ac = new AbortController();
-        this._streamAbort = ac;
-
+        const epoch = this._bumpEpoch();
         try {
-            await streamAgentMessage({
-                url: `${this._agentBaseUrl()}/api/v1/messages`,
+            await this._streamAgent({
+                epoch,
                 token,
-                body,
-                signal: ac.signal,
-                onEvent: (ev) => {
-                    if (ev.type === 'TEXT_MESSAGE_CONTENT' && !ev.is_from_sub_run) {
-                        if (!ref.assistantId) {
-                            ref.assistantId = this.chatModel.addMessage({
-                                text: '',
-                                isUser: false,
-                                status: 'streaming',
-                            }).id;
-                        }
-                    }
-                    this._handleAgentEvent(ev, {
-                        getAssistantId: () => ref.assistantId,
-                        getBuffer: () => ref.buffer,
-                        setBuffer: (v) => {
-                            ref.buffer = v;
-                        },
-                        onMessagesUpdate,
-                        onSnapshot: (list) => {
-                            const rows = mapSnapshotToChatRows(list);
-                            this.chatModel.clearMessages();
-                            rows.forEach((r) => this.chatModel.addMessage(r));
-                            ref.assistantId = null;
-                            ref.buffer = '';
-                            onMessagesUpdate?.();
-                        },
-                    });
+                body: this._buildJoinBody(),
+                onMessagesUpdate,
+                allowReconnect: true,
+                onSnapshot: (list) => {
+                    const rows = mapSnapshotToChatRows(list);
+                    this.chatModel.clearMessages();
+                    rows.forEach((r) => this.chatModel.addMessage(r));
+                    onMessagesUpdate?.();
                 },
             });
         } catch (e) {
-            if (e.message !== 'Aborted' && ref.assistantId) {
-                this.chatModel.updateMessage(ref.assistantId, {
-                    text: ref.buffer || e.message,
+            if (e.message !== 'Aborted') {
+                this.chatModel.addMessage({
+                    text: `Kết nối bị gián đoạn: ${e.message}`,
+                    isUser: false,
                     status: 'error',
                 });
                 onMessagesUpdate?.();
             }
         } finally {
-            if (ref.assistantId) {
-                this._finalizeAssistantMessage(
-                    ref.assistantId,
-                    () => ref.buffer,
-                    onMessagesUpdate
-                );
-            }
-            this._streamAbort = null;
+            // no-op
         }
 
         return { messages: this.chatModel.getMessages() };
     }
 
     _handleAgentEvent(ev, ctx) {
-        const { getAssistantId, assistantId: fixedAssistantId, getBuffer, setBuffer, onMessagesUpdate, onSnapshot } =
-            ctx;
-        const assistantId =
-            typeof getAssistantId === 'function' ? getAssistantId() : fixedAssistantId;
-        let assistantBuffer = getBuffer();
-
+        const { onMessagesUpdate, onSnapshot } = ctx || {};
+        const type = String(ev?.type || '');
         switch (ev.type) {
             case 'RUN_STARTED':
                 if (ev.thread_id) this.conversationId = ev.thread_id;
                 if (ev.run_id) this.runId = ev.run_id;
+                this._runActive = true;
+                this._currentAssistantId = null;
                 break;
+            case 'STATE_SNAPSHOT': {
+                const run = ev.data?.run;
+                if (run?.id) this.runId = run.id;
+                const state = run?.state;
+                this._runActive =
+                    state === 'running' || state === 'pending' || state === 'interrupted';
+                break;
+            }
+            case 'STATE_DELTA': {
+                // Minimal: keep watchdog alive; server may send deltas without text.
+                // If state is present, update runActive.
+                const run = ev.data?.run;
+                const state = run?.state;
+                if (state) {
+                    this._runActive =
+                        state === 'running' || state === 'pending' || state === 'interrupted';
+                }
+                break;
+            }
+            case 'TEXT_MESSAGE_START': {
+                this._ensureStreamingPlaceholder();
+                onMessagesUpdate?.();
+                break;
+            }
             case 'TEXT_MESSAGE_CONTENT': {
-                if (!assistantId) break;
                 if (ev.is_from_sub_run) break;
-                const piece = ev.delta != null ? ev.delta : ev.text || '';
+                const piece = readEventText(ev);
                 if (!piece) break;
-                assistantBuffer += piece;
-                setBuffer(assistantBuffer);
-                this.chatModel.updateMessage(assistantId, {
-                    text: assistantBuffer,
+                this._ensureStreamingPlaceholder();
+                const cur = this.chatModel
+                    .getMessages()
+                    .find((m) => m.id === this._currentAssistantId);
+                this.chatModel.updateMessage(this._currentAssistantId, {
+                    text: `${cur?.text || ''}${piece}`,
                     status: 'streaming',
                 });
+                onMessagesUpdate?.();
+                break;
+            }
+            case 'TEXT_MESSAGE_END': {
+                const finalText = `${readEventText(ev) || ''}`.trim();
+                if (!this._currentAssistantId) {
+                    if (!finalText) break;
+                    const model = this.chatModel.addMessage({
+                        text: finalText,
+                        isUser: false,
+                        status: 'sent',
+                    });
+                    this._currentAssistantId = model.id;
+                } else {
+                    const cur = this.chatModel
+                        .getMessages()
+                        .find((m) => m.id === this._currentAssistantId);
+                    const nextText = `${cur?.text || ''}${finalText || ''}`.trim();
+                    if (nextText) {
+                        this.chatModel.updateMessage(this._currentAssistantId, {
+                            text: nextText,
+                            status: 'sent',
+                        });
+                    } else {
+                        this.chatModel.removeMessage(this._currentAssistantId);
+                    }
+                }
+                this._currentAssistantId = null;
+                this._cleanupEmptyStreamingAssistants();
+                onMessagesUpdate?.();
+                break;
+            }
+            case 'TEXT_MESSAGE': {
+                // Some backends may emit a non-standard consolidated text event.
+                const txt = `${readEventText(ev) || ''}`.trim();
+                if (!txt) break;
+                this.chatModel.addMessage({
+                    text: txt,
+                    isUser: false,
+                    status: 'sent',
+                });
+                this._currentAssistantId = null;
+                this._cleanupEmptyStreamingAssistants();
+                onMessagesUpdate?.();
+                break;
+            }
+            case 'THINKING_TEXT_MESSAGE_CONTENT': {
+                const piece = readEventText(ev);
+                if (!piece) break;
+                const rows = this.chatModel.getMessages();
+                const last = rows.slice().reverse().find((m) => !m.isUser);
+                const id =
+                    last && last.status === 'streaming'
+                        ? last.id
+                        : this.chatModel.addMessage({ text: '', isUser: false, status: 'streaming' })
+                              .id;
+                const current = this.chatModel.getMessages().find((m) => m.id === id);
+                const meta = current?.meta || {};
+                const thinkingText = `${meta.thinkingText || ''}${piece}`;
+                this.chatModel.updateMessage(id, { meta: { ...meta, thinkingText } });
+                onMessagesUpdate?.();
+                break;
+            }
+            case 'TOOL_CALL_START': {
+                const id = ev.tool_call_id || ev.toolCallId || ev.data?.tool_call_id;
+                const name = ev.tool_name || ev.toolName || ev.data?.tool_name;
+                if (!id) break;
+                this._toolCalls.set(id, {
+                    id,
+                    name,
+                    argsText: '',
+                    resultText: '',
+                    is_error: false,
+                });
+                this._syncToolCallToLastAssistant(id, onMessagesUpdate);
+                break;
+            }
+            case 'TOOL_CALL_ARGS': {
+                const id = ev.tool_call_id || ev.toolCallId || ev.data?.tool_call_id;
+                const tc = id ? this._toolCalls.get(id) : null;
+                if (!tc) break;
+                const piece = readEventText(ev);
+                this._toolCalls.set(id, { ...tc, argsText: `${tc.argsText || ''}${piece}` });
+                this._syncToolCallToLastAssistant(id, onMessagesUpdate);
+                break;
+            }
+            case 'TOOL_CALL_RESULT': {
+                const id = ev.tool_call_id || ev.toolCallId || ev.data?.tool_call_id;
+                const tc = id ? this._toolCalls.get(id) : null;
+                if (!tc) break;
+                const resultText = ev.result != null ? String(ev.result) : tc.resultText || '';
+                this._toolCalls.set(id, { ...tc, resultText, is_error: !!ev.is_error });
+                this._syncToolCallToLastAssistant(id, onMessagesUpdate);
+                break;
+            }
+            case 'TOOL_CALL_END': {
+                const id = ev.tool_call_id || ev.toolCallId || ev.data?.tool_call_id;
+                if (!id) break;
+                this._syncToolCallToLastAssistant(id, onMessagesUpdate);
+                break;
+            }
+            case 'THINKING_ARTIFACTS':
+            case 'TEXT_MESSAGE_ARTIFACTS': {
+                const artifacts = ev.artifacts || ev.data?.artifacts;
+                if (!Array.isArray(artifacts) || artifacts.length === 0) break;
+                const rows = this.chatModel.getMessages();
+                const last = rows.slice().reverse().find((m) => !m.isUser);
+                if (!last) break;
+                const meta = last.meta || {};
+                const list = Array.isArray(meta.artifacts) ? meta.artifacts.slice() : [];
+                const token = apiClient.getAuthToken();
+                for (const a of artifacts) {
+                    const base = { ...a };
+                    // Best-effort: build direct URL; later can upgrade to signed-url if backend requires it.
+                    if (!base.url && this.conversationId && base.type && base.name && base.content) {
+                        base.url = AgentApiService.buildArtifactGetUrl(this.conversationId, base);
+                    }
+                    list.push(base);
+                    if (token && this.conversationId && base.type && base.name && base.content) {
+                        AgentApiService.artifactSignedUrl(token, this.conversationId, base)
+                            .then((resp) => {
+                                const signed = resp?.data?.url || resp?.data?.signed_url || resp?.data?.signedUrl;
+                                if (!signed) return;
+                                const now = this.chatModel.getMessages();
+                                const cur = now.find((m) => m.id === last.id);
+                                if (!cur) return;
+                                const curMeta = cur.meta || {};
+                                const curList = Array.isArray(curMeta.artifacts)
+                                    ? curMeta.artifacts.slice()
+                                    : [];
+                                const idx = curList.findIndex(
+                                    (x) => x.name === base.name && x.content === base.content
+                                );
+                                if (idx >= 0) curList[idx] = { ...curList[idx], url: signed };
+                                this.chatModel.updateMessage(last.id, {
+                                    meta: { ...curMeta, artifacts: curList },
+                                });
+                                onMessagesUpdate?.();
+                            })
+                            .catch(() => {});
+                    }
+                }
+                this.chatModel.updateMessage(last.id, { meta: { ...meta, artifacts: list } });
                 onMessagesUpdate?.();
                 break;
             }
@@ -161,72 +506,125 @@ class ChatController {
                 break;
             }
             case 'RUN_FINISHED':
-                if (!assistantId) {
-                    onMessagesUpdate?.();
-                    break;
-                }
+                this._runActive = false;
                 if (ev.outcome === 'interrupt' && ev.interrupt) {
                     this.pendingInterrupt = ev.interrupt;
                     const q = ev.interrupt.question || 'Cần xác nhận từ bạn.';
                     const opts = ev.interrupt.options?.length
                         ? `\n${ev.interrupt.options.map((o, i) => `${i + 1}. ${o}`).join('\n')}`
                         : '';
-                    assistantBuffer += (assistantBuffer ? '\n\n' : '') + q + opts;
-                    setBuffer(assistantBuffer);
-                    this.chatModel.updateMessage(assistantId, {
-                        text: assistantBuffer,
+                    this.chatModel.addMessage({
+                        text: `${q}${opts}`,
+                        isUser: false,
                         status: 'sent',
                     });
                 } else {
                     this.pendingInterrupt = null;
-                    this.chatModel.updateMessage(assistantId, {
-                        text: assistantBuffer,
-                        status: 'sent',
-                    });
+                    // finalize current assistant message if stream closed without TEXT_MESSAGE_END.
+                    if (this._currentAssistantId) {
+                        const cur = this.chatModel
+                            .getMessages()
+                            .find((m) => m.id === this._currentAssistantId);
+                        const fallbackText = readEventText(ev);
+                        const safeText =
+                            `${cur?.text || ''}`.trim() || `${fallbackText || ''}`.trim();
+                        if (safeText) {
+                            this.chatModel.updateMessage(this._currentAssistantId, {
+                                status: 'sent',
+                                text: safeText,
+                            });
+                        } else {
+                            this.chatModel.removeMessage(this._currentAssistantId);
+                        }
+                        this._currentAssistantId = null;
+                    }
+                    // If run finished successfully but no assistant text was emitted, surface explicit info.
+                    const hasAssistantText = this.chatModel
+                        .getMessages()
+                        .some((m) => !m.isUser && `${m.text || ''}`.trim().length > 0);
+                    if (!hasAssistantText && ev.outcome === 'success') {
+                        this.chatModel.addMessage({
+                            text: 'Run hoàn tất nhưng server không trả TEXT_MESSAGE_CONTENT/TEXT_MESSAGE_END.',
+                            isUser: false,
+                            status: 'error',
+                        });
+                    }
+                    // Best-effort: attach citations to last assistant message
+                    const token = apiClient.getAuthToken();
+                    const last = this.chatModel.getMessages().slice().reverse().find((m) => !m.isUser);
+                    if (token && this.runId && last) {
+                        AgentApiService.fetchCitations(token, this.runId)
+                            .then((resp) => {
+                                const cites = resp?.data?.citations || resp?.data || [];
+                                const now = this.chatModel.getMessages();
+                                const cur = now.find((m) => m.id === last.id);
+                                if (!cur) return;
+                                const curMeta = cur.meta || {};
+                                this.chatModel.updateMessage(last.id, {
+                                    meta: { ...curMeta, citations: Array.isArray(cites) ? cites : [] },
+                                });
+                                onMessagesUpdate?.();
+                            })
+                            .catch(() => {});
+                    }
                 }
+                this._cleanupEmptyStreamingAssistants();
                 onMessagesUpdate?.();
                 break;
             case 'RUN_ERROR':
             case 'ERROR': {
-                if (!assistantId) break;
                 const errText =
                     ev.result || ev.text || ev.data?.message || 'Đã xảy ra lỗi.';
-                assistantBuffer += (assistantBuffer ? '\n\n' : '') + errText;
-                setBuffer(assistantBuffer);
-                this.chatModel.updateMessage(assistantId, {
-                    text: assistantBuffer,
+                this._runActive = false;
+                this._currentAssistantId = null;
+                this._cleanupEmptyStreamingAssistants();
+                this.chatModel.addMessage({
+                    text: errText,
+                    isUser: false,
                     status: 'error',
                 });
                 onMessagesUpdate?.();
                 break;
             }
             case 'USER_CANCELLED':
-                if (!assistantId) break;
-                this.chatModel.updateMessage(assistantId, {
-                    text: assistantBuffer || 'Đã dừng.',
-                    status: 'sent',
-                });
+                this._runActive = false;
+                this._currentAssistantId = null;
+                this._cleanupEmptyStreamingAssistants();
                 onMessagesUpdate?.();
                 break;
             default:
+                // Defensive fallback: if backend emits unknown *TEXT* event with payload, still render it.
+                if (/TEXT/i.test(type)) {
+                    const txt = `${readEventText(ev) || ''}`.trim();
+                    if (txt) {
+                        this.chatModel.addMessage({
+                            text: txt,
+                            isUser: false,
+                            status: 'sent',
+                        });
+                        onMessagesUpdate?.();
+                    }
+                }
                 break;
         }
     }
 
-    _finalizeAssistantMessage(assistantId, getBuffer, onMessagesUpdate) {
+    _syncToolCallToLastAssistant(toolCallId, onMessagesUpdate) {
+        const tc = this._toolCalls.get(toolCallId);
+        if (!tc) return;
         const rows = this.chatModel.getMessages();
-        const row = rows.find((m) => m.id === assistantId);
-        if (row && row.status === 'streaming') {
-            const text = getBuffer();
-            this.chatModel.updateMessage(assistantId, {
-                text,
-                status: 'sent',
-            });
-            onMessagesUpdate?.();
-        }
+        const last = rows.slice().reverse().find((m) => !m.isUser);
+        if (!last) return;
+        const meta = last.meta || {};
+        const list = Array.isArray(meta.toolCalls) ? meta.toolCalls.slice() : [];
+        const idx = list.findIndex((x) => x.id === toolCallId);
+        if (idx >= 0) list[idx] = { ...list[idx], ...tc };
+        else list.push(tc);
+        this.chatModel.updateMessage(last.id, { meta: { ...meta, toolCalls: list } });
+        onMessagesUpdate?.();
     }
 
-    async sendUserMessage(text, onMessagesUpdate) {
+    async sendUserMessage(text, onMessagesUpdate, options = {}) {
         if (!USE_AGENT_CHAT) {
             return this._sendUserMessageLegacy(text, onMessagesUpdate);
         }
@@ -241,73 +639,63 @@ class ChatController {
             return { messages: this.chatModel.getMessages() };
         }
 
-        const userMessage = this.chatModel.addMessage({
-            text,
-            isUser: true,
-        });
-        onMessagesUpdate?.();
-
-        const assistantModel = this.chatModel.addMessage({
-            text: '',
-            isUser: false,
-            status: 'streaming',
-        });
-        const assistantId = assistantModel.id;
-        let assistantBuffer = '';
+        let userMessage = null;
+        if (!options?.skipUserMessage) {
+            const userMeta =
+                options?.attachments?.length ? { attachments: options.attachments } : null;
+            userMessage = this.chatModel.addMessage({
+                text,
+                isUser: true,
+                ...(userMeta ? { meta: userMeta } : {}),
+            });
+            onMessagesUpdate?.();
+        }
 
         const body = {
+            agent: resolvedAgentCode(),
+            agent_type: 'single',
             message: text,
             message_id: randomUuid(),
+            context: defaultViewingContext(),
             user_time_zone:
                 Intl.DateTimeFormat?.().resolvedOptions?.().timeZone || 'Asia/Ho_Chi_Minh',
         };
-        if (this.conversationId) body.conversation_id = this.conversationId;
-        if (AGENT_CODE) body.agent = AGENT_CODE;
-
-        if (this._streamAbort) this._streamAbort.abort();
-        const ac = new AbortController();
-        this._streamAbort = ac;
+        if (options?.attachments?.length) {
+            body.context = {
+                ...(body.context || {}),
+                attachments: options.attachments,
+            };
+        }
+        if (!options?.forceNewConversation && this.conversationId) {
+            body.conversation_id = this.conversationId;
+        }
+        const epoch = this._bumpEpoch();
 
         try {
-            await streamAgentMessage({
-                url: `${this._agentBaseUrl()}/api/v1/messages`,
+            this._ensureStreamingPlaceholder();
+            onMessagesUpdate?.();
+            await this._streamAgent({
+                epoch,
                 token,
                 body,
-                signal: ac.signal,
-                onEvent: (ev) => {
-                    this._handleAgentEvent(ev, {
-                        getAssistantId: () => assistantId,
-                        getBuffer: () => assistantBuffer,
-                        setBuffer: (v) => {
-                            assistantBuffer = v;
-                        },
-                        onMessagesUpdate,
-                    });
-                },
+                onMessagesUpdate,
+                allowReconnect: true,
             });
         } catch (e) {
             if (e.message === 'Aborted') {
-                this.chatModel.updateMessage(assistantId, {
-                    text: assistantBuffer || 'Đã dừng.',
-                    status: 'sent',
-                });
-                onMessagesUpdate?.();
+                // user manually stopped; keep UI silent
             } else {
-                this.chatModel.updateMessage(assistantId, {
-                    text: assistantBuffer
-                        ? `${assistantBuffer}\n\n${e.message}`
-                        : `Xin lỗi, ${e.message}`,
+                this.chatModel.addMessage({
+                    text: `Xin lỗi, ${e.message}`,
+                    isUser: false,
                     status: 'error',
                 });
                 onMessagesUpdate?.();
             }
-        } finally {
-            this._finalizeAssistantMessage(assistantId, () => assistantBuffer, onMessagesUpdate);
-            this._streamAbort = null;
         }
 
         return {
-            userMessage: userMessage.toJSON(),
+            userMessage: userMessage ? userMessage.toJSON() : null,
             messages: this.chatModel.getMessages(),
         };
     }
@@ -338,64 +726,38 @@ class ChatController {
             return { messages: this.chatModel.getMessages() };
         }
 
-        const assistantModel = this.chatModel.addMessage({
-            text: '',
-            isUser: false,
-            status: 'streaming',
-        });
-        const assistantId = assistantModel.id;
-        let assistantBuffer = '';
-
         const body = {
+            agent: resolvedAgentCode(),
+            agent_type: 'single',
             conversation_id: this.conversationId,
             run_id: this.runId,
             resume: { interrupt_id: intr.id, payload: resumePayload },
             message_id: randomUuid(),
+            context: defaultViewingContext(),
             user_time_zone:
                 Intl.DateTimeFormat?.().resolvedOptions?.().timeZone || 'Asia/Ho_Chi_Minh',
         };
-        if (AGENT_CODE) body.agent = AGENT_CODE;
-
-        if (this._streamAbort) this._streamAbort.abort();
-        const ac = new AbortController();
-        this._streamAbort = ac;
+        const epoch = this._bumpEpoch();
 
         try {
-            await streamAgentMessage({
-                url: `${this._agentBaseUrl()}/api/v1/messages`,
+            await this._streamAgent({
+                epoch,
                 token,
                 body,
-                signal: ac.signal,
-                onEvent: (ev) => {
-                    this._handleAgentEvent(ev, {
-                        getAssistantId: () => assistantId,
-                        getBuffer: () => assistantBuffer,
-                        setBuffer: (v) => {
-                            assistantBuffer = v;
-                        },
-                        onMessagesUpdate,
-                    });
-                },
+                onMessagesUpdate,
+                allowReconnect: true,
             });
         } catch (e) {
             if (e.message === 'Aborted') {
-                this.chatModel.updateMessage(assistantId, {
-                    text: assistantBuffer || 'Đã dừng.',
-                    status: 'sent',
-                });
-                onMessagesUpdate?.();
+                // user manually stopped; keep UI silent
             } else {
-                this.chatModel.updateMessage(assistantId, {
-                    text: assistantBuffer
-                        ? `${assistantBuffer}\n\n${e.message}`
-                        : `Xin lỗi, ${e.message}`,
+                this.chatModel.addMessage({
+                    text: `Xin lỗi, ${e.message}`,
+                    isUser: false,
                     status: 'error',
                 });
                 onMessagesUpdate?.();
             }
-        } finally {
-            this._finalizeAssistantMessage(assistantId, () => assistantBuffer, onMessagesUpdate);
-            this._streamAbort = null;
         }
 
         return { messages: this.chatModel.getMessages() };
@@ -404,6 +766,29 @@ class ChatController {
     /** Gán thread để joinConversation / tiếp tục hội thoại. */
     setConversationId(id) {
         this.conversationId = id || null;
+    }
+
+    editUserMessage(messageId, newText) {
+        const next = `${newText || ''}`.trim();
+        if (!next) return { success: false, error: 'Nội dung trống' };
+        const row = this.chatModel.getMessages().find((m) => m.id === messageId);
+        if (!row || !row.isUser) return { success: false, error: 'Không tìm thấy tin nhắn user' };
+        this.chatModel.updateMessage(messageId, { text: next, timestamp: new Date() });
+        return { success: true };
+    }
+
+    editAndPruneFromMessage(messageId, newText) {
+        const edited = this.editUserMessage(messageId, newText);
+        if (!edited.success) return edited;
+        const rows = this.chatModel.messages || [];
+        const idx = rows.findIndex((m) => m.id === messageId);
+        if (idx < 0) return { success: false, error: 'Không tìm thấy vị trí tin nhắn' };
+        this.chatModel.messages = rows.slice(0, idx + 1);
+        this.runId = null;
+        this.pendingInterrupt = null;
+        this.conversationId = null;
+        this._currentAssistantId = null;
+        return { success: true };
     }
 
     async _sendUserMessageLegacy(text, onMessagesUpdate) {
@@ -429,7 +814,7 @@ class ChatController {
         }
 
         const errorMessage = this.chatModel.addMessage({
-            text: 'Xin lỗi, có lỗi xảy ra. Vui lòng thử lại sau.',
+            text: `Lỗi chat fallback: ${response?.error || 'không rõ nguyên nhân'}. Bật EXPO_PUBLIC_USE_AGENT_CHAT=true để dùng SSE theo tài liệu.`,
             isUser: false,
         });
 
@@ -451,11 +836,41 @@ class ChatController {
             this._streamAbort.abort();
             this._streamAbort = null;
         }
+        this._clearWatchdog();
         this.conversationId = null;
         this.runId = null;
         this.pendingInterrupt = null;
+        this._runActive = false;
+        this._currentAssistantId = null;
+        this._lastEventAt = 0;
         this.chatModel.clearMessages();
         this.ensureWelcomeMessage();
+    }
+
+    /**
+     * Stop current run: abort SSE and call server cancel endpoint (§5.4).
+     */
+    async cancelCurrentRun(onMessagesUpdate) {
+        if (this._streamAbort) {
+            this._streamAbort.abort();
+            this._streamAbort = null;
+        }
+        this._runActive = false;
+        this._currentAssistantId = null;
+        this._clearWatchdog();
+        this._cleanupEmptyStreamingAssistants();
+
+        if (!USE_AGENT_CHAT) return { success: true };
+        const token = apiClient.getAuthToken();
+        if (token && this.conversationId) {
+            try {
+                await AgentApiService.cancelConversation(token, this.conversationId);
+            } catch {
+                // ignore; user already stopped locally
+            }
+        }
+        onMessagesUpdate?.();
+        return { success: true };
     }
 }
 
