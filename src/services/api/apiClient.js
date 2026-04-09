@@ -15,6 +15,13 @@ class ApiClient {
         }
     }
 
+    getAuthToken() {
+        const auth = this.headers['Authorization'];
+        if (!auth || typeof auth !== 'string') return null;
+        const m = auth.match(/^Bearer\s+(.+)$/i);
+        return m ? m[1].trim() : null;
+    }
+
     async request(endpoint, options = {}) {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), this.timeout);
@@ -44,11 +51,13 @@ class ApiClient {
     }
 
     get(endpoint, params = {}) {
-        const url = new URL(endpoint, this.baseURL);
-        Object.keys(params).forEach(key =>
-            url.searchParams.append(key, params[key])
-        );
-        return this.request(url.pathname + url.search, { method: 'GET' });
+        const query = Object.keys(params)
+            .filter((key) => params[key] !== undefined && params[key] !== null && params[key] !== '')
+            .map((key) => `${encodeURIComponent(key)}=${encodeURIComponent(String(params[key]))}`)
+            .join('&');
+        const sep = endpoint.includes('?') ? '&' : '?';
+        const finalEndpoint = query ? `${endpoint}${sep}${query}` : endpoint;
+        return this.request(finalEndpoint, { method: 'GET' });
     }
 
     post(endpoint, data) {

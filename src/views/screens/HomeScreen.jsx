@@ -8,18 +8,44 @@ import {
     TouchableOpacity,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import UserController from '../../controllers/UserController';
 import StatController from '../../controllers/StatController';
 import { useResponsive } from '../../hooks/useResponsive';
 import Header from '../components/common/Header';
 import StatCard from '../components/statistics/StatCard';
 import LoadingSpinner from '../components/common/LoadingSpinner';
+import { TASK_UNITS } from '../../config/api.config';
+import { useAuth } from '../../contexts/AuthContext';
+
+function monthKeyFromDate(d) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    return `${y}${m}`;
+}
+
+function monthLabel(d) {
+    return `Tháng ${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+}
 
 export default function HomeScreen() {
-    const [stats, setStats] = useState([]);
-    const [user, setUser] = useState(null);
+    const { user } = useAuth();
+    const [stats, setStats] = useState(() =>
+        TASK_UNITS.map((name, i) => ({
+            id: String(i + 1),
+            name,
+            title: name,
+            cthQuaHan: 0,
+            cthSapQuaHan: 0,
+            cthTrongHan: 0,
+            htQuaHan: 0,
+            htDangKy: 0,
+            total: 0,
+            status: 'normal',
+            color: '#2563eb',
+        }))
+    );
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
+    const [selectedMonth, setSelectedMonth] = useState(() => new Date());
     const { scale, isTablet, isSmall, isLandscape, width } = useResponsive();
     const statSectionPadding = scale(isTablet ? 16 : 12);
     const statGap = scale(10);
@@ -29,22 +55,31 @@ export default function HomeScreen() {
 
     useEffect(() => {
         loadData();
-    }, []);
+    }, [selectedMonth, user?.email]);
 
     const loadData = async () => {
         try {
             setLoading(true);
-            const [userRes, statRes] = await Promise.all([
-                UserController.loadCurrentUser(),
-                StatController.loadStatistics(),
-            ]);
-
-            if (userRes.success) {
-                setUser(userRes.data);
-            }
-
-            if (statRes.success) {
-                setStats(statRes.data.slice(0, 4));
+            const monthKey = monthKeyFromDate(selectedMonth);
+            const statRes = await StatController.loadStatistics({ monthKey });
+            if (statRes.success) setStats(statRes.data);
+            else {
+                // Luôn hiển thị 4 mục để UI không bị "mất" phần Nhận nhiệm vụ.
+                setStats(
+                    TASK_UNITS.map((name, i) => ({
+                        id: String(i + 1),
+                        name,
+                        title: name,
+                        cthQuaHan: 0,
+                        cthSapQuaHan: 0,
+                        cthTrongHan: 0,
+                        htQuaHan: 0,
+                        htDangKy: 0,
+                        total: 0,
+                        status: 'normal',
+                        color: '#2563eb',
+                    }))
+                );
             }
         } finally {
             setLoading(false);
@@ -55,6 +90,12 @@ export default function HomeScreen() {
         setRefreshing(true);
         await loadData();
         setRefreshing(false);
+    };
+
+    const shiftMonth = (delta) => {
+        const d = new Date(selectedMonth);
+        d.setMonth(d.getMonth() + delta);
+        setSelectedMonth(d);
     };
 
     if (loading) {
@@ -70,7 +111,7 @@ export default function HomeScreen() {
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={{ paddingBottom: scale(130) }}
             >
-                <Header user={user} />
+                <Header />
 
                 
 
@@ -79,15 +120,30 @@ export default function HomeScreen() {
                         flexDirection: 'row',
                         justifyContent: 'space-between',
                         alignItems: 'center',
-                        marginBottom: scale(16),
+                        marginBottom: scale(10),
                     }}>
                         <Text style={{ fontSize: scale(20), fontWeight: 'bold', color: '#1f2937' }}>
-                            Báo cáo thống kê
+                            Nhận nhiệm vụ
                         </Text>
-                        <TouchableOpacity>
-                            <Text style={{ color: '#2563eb', fontSize: scale(14), fontWeight: '500' }}>
-                                Xem thêm
-                            </Text>
+                    </View>
+
+                    <View style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        backgroundColor: '#ffffff',
+                        borderRadius: scale(12),
+                        paddingVertical: scale(8),
+                        marginBottom: scale(14),
+                    }}>
+                        <TouchableOpacity onPress={() => shiftMonth(-1)} style={{ paddingHorizontal: scale(14) }}>
+                            <MaterialIcons name="chevron-left" size={22} color="#1d4ed8" />
+                        </TouchableOpacity>
+                        <Text style={{ color: '#1f2937', fontWeight: '700', minWidth: scale(130), textAlign: 'center' }}>
+                            {monthLabel(selectedMonth)}
+                        </Text>
+                        <TouchableOpacity onPress={() => shiftMonth(1)} style={{ paddingHorizontal: scale(14) }}>
+                            <MaterialIcons name="chevron-right" size={22} color="#1d4ed8" />
                         </TouchableOpacity>
                     </View>
 

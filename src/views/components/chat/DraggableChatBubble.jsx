@@ -119,7 +119,7 @@ export default function DraggableChatBubble() {
                         alignItems: 'center',
                     }}>
                         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                            <MaterialIcons name="smart-toy" size={24} color="white" />
+                            <MaterialIcons name="chat" size={24} color="white" />
                             <Text style={{ color: 'white', fontSize: 18, fontWeight: 'bold', marginLeft: 8 }}>
                                 Trợ lý AI HaNoiBrain
                             </Text>

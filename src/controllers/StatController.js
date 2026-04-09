@@ -1,10 +1,10 @@
 import DataService from '../services/DataService';
 
 class StatController {
-    async loadStatistics() {
+    async loadStatistics(filters = {}) {
         try {
-            const statsRes = await DataService.getStatistics();
-            const overviewRes = await DataService.getOverviewStats();
+            const statsRes = await DataService.getStatistics(filters);
+            const overviewRes = await DataService.getOverviewStats(filters);
 
             if (statsRes.success && overviewRes.success) {
                 const normalizedStats = statsRes.data.map((item) => ({
@@ -22,7 +22,12 @@ class StatController {
                     overview: overviewRes.data
                 };
             }
-            return { success: false, error: 'Không thể tải dữ liệu' };
+            const err =
+                statsRes.error ||
+                overviewRes.error ||
+                'Không thể tải dữ liệu (statistics/overview)';
+            console.error('loadStatistics failed', { statsRes, overviewRes });
+            return { success: false, error: err, statsRes, overviewRes };
         } catch (error) {
             return { success: false, error: error.message };
         }

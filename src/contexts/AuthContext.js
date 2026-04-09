@@ -7,10 +7,21 @@ export function AuthProvider({ children }) {
     const [user, setUser] = useState(null);
     const [isLoading, setIsLoading] = useState(false);
 
-    const login = async (username, password) => {
+    /** @param {string} email - Theo Core API §2.1; mock chấp nhận admin / admin@hanobrain.vn */
+    const login = async (email, password) => {
         setIsLoading(true);
-        const result = await AuthService.login(username, password);
+        const result = await AuthService.login(email, password);
         if (result.success) {
+            setUser(result.data);
+        }
+        setIsLoading(false);
+        return result;
+    };
+
+    const register = async (email, password) => {
+        setIsLoading(true);
+        const result = await AuthService.register(email, password);
+        if (result.success && result.data) {
             setUser(result.data);
         }
         setIsLoading(false);
@@ -23,7 +34,7 @@ export function AuthProvider({ children }) {
     };
 
     return (
-        <AuthContext.Provider value={{ user, login, logout, isLoading }}>
+        <AuthContext.Provider value={{ user, login, register, logout, isLoading }}>
             {children}
         </AuthContext.Provider>
     );

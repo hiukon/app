@@ -30,6 +30,12 @@ class ChatModel {
         return newMessage;
     }
 
+    updateMessage(id, patch) {
+        const msg = this.messages.find((m) => m.id === id);
+        if (!msg) return;
+        Object.assign(msg, patch);
+    }
+
     getMessages() {
         return this.messages.map(msg => msg.toJSON());
     }

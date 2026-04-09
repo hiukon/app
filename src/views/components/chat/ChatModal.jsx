@@ -21,7 +21,7 @@ export default function ChatModal({ visible, onClose }) {
                 {/* Header */}
                 <View className="bg-blue-600 p-4 pt-12 flex-row justify-between items-center">
                     <View className="flex-row items-center">
-                        <MaterialIcons name="smart-toy" size={24} color="white" />
+                        <MaterialIcons name="chat" size={24} color="white" />
                         <Text className="text-white text-lg font-bold ml-2">Trợ lý AI HaNoiBrain</Text>
                     </View>
                     <TouchableOpacity onPress={onClose}>

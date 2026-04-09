@@ -10,8 +10,9 @@ export function useChat() {
         if (!text?.trim()) return { messages };
         setIsSending(true);
         try {
-            const result = await chatController.sendUserMessage(text.trim());
-            setMessages(result.messages);
+            const bump = () => setMessages(chatController.getMessages());
+            const result = await chatController.sendUserMessage(text.trim(), bump);
+            setMessages(chatController.getMessages());
             return result;
         } finally {
             setIsSending(false);
