@@ -5,14 +5,46 @@ export function useChat() {
     const [chatController] = useState(() => new ChatController());
     const [messages, setMessages] = useState(() => chatController.getMessages());
     const [isSending, setIsSending] = useState(false);
+    const [pendingInterrupt, setPendingInterrupt] = useState(() =>
+        chatController.getPendingInterrupt?.() || null
+    );
+    const [conversations, setConversations] = useState([]);
+    const toInterruptPayload = (interrupt, input) => {
+        const reason = `${interrupt?.reason || ''}`.toLowerCase();
+        const value = `${input || ''}`.trim();
+        if (reason === 'human_approval' || reason === 'database_modification' || reason === 'multi_step_confirm') {
+            const yes = /^(yes|y|approve|đồng ý|dong y|ok)$/i.test(value);
+            return { action: yes ? 'approve' : 'reject', answer: value || undefined };
+        }
+        if (reason === 'error_recovery') {
+            if (/retry/i.test(value)) return { action: 'retry' };
+            if (/skip/i.test(value)) return { action: 'skip' };
+            if (/abort|huy|cancel/i.test(value)) return { action: 'abort' };
+            return { action: 'retry' };
+        }
+        // upload_required / information_gathering and others
+        return { answer: value };
+    };
+
+
+    const sortConversationsDesc = (list = []) =>
+        [...list].sort((a, b) =>
+            `${b?.updated_at || b?.created_at || ''}`.localeCompare(
+                `${a?.updated_at || a?.created_at || ''}`
+            )
+        );
 
     const sendMessage = async (text, options = {}) => {
         if (!text?.trim()) return { messages };
         setIsSending(true);
         try {
-            const bump = () => setMessages(chatController.getMessages());
+            const bump = () => {
+                setMessages(chatController.getMessages());
+                setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
+            };
             const result = await chatController.sendUserMessage(text.trim(), bump, options);
             setMessages(chatController.getMessages());
+            setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
             return result;
         } finally {
             setIsSending(false);
@@ -20,15 +52,20 @@ export function useChat() {
     };
 
     const cancel = async () => {
-        const bump = () => setMessages(chatController.getMessages());
+        const bump = () => {
+            setMessages(chatController.getMessages());
+            setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
+        };
         await chatController.cancelCurrentRun(bump);
         setIsSending(false);
         setMessages(chatController.getMessages());
+        setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
     };
 
     const editMessage = (messageId, newText) => {
         const result = chatController.editUserMessage(messageId, newText);
         setMessages(chatController.getMessages());
+        setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
         return result;
     };
 
@@ -40,21 +77,97 @@ export function useChat() {
         }
         setIsSending(true);
         try {
-            const bump = () => setMessages(chatController.getMessages());
+            const bump = () => {
+                setMessages(chatController.getMessages());
+                setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
+            };
             const result = await chatController.sendUserMessage(newText.trim(), bump, {
                 skipUserMessage: true,
             });
             setMessages(chatController.getMessages());
+            setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
             return { success: true, result };
         } finally {
             setIsSending(false);
         }
     };
 
+    const answerInterrupt = async (input) => {
+        setIsSending(true);
+        try {
+            const bump = () => {
+                setMessages(chatController.getMessages());
+                setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
+            };
+            const intr = chatController.getPendingInterrupt?.() || null;
+            const payload = toInterruptPayload(intr, input);
+            const out = await chatController.resumeAgentInterrupt(payload, bump);
+            setMessages(chatController.getMessages());
+            setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
+            return out;
+        } finally {
+            setIsSending(false);
+        }
+    };
+
+    const loadConversations = async () => {
+        const out = await chatController.listConversations();
+        if (out.success) setConversations(sortConversationsDesc(out.data || []));
+        return out;
+    };
+
+    const openConversation = async (conversationId) => {
+        setIsSending(true);
+        try {
+            const bump = () => {
+                setMessages(chatController.getMessages());
+                setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
+            };
+            const out = await chatController.openConversation(conversationId, bump);
+            setMessages(chatController.getMessages());
+            setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
+            return out;
+        } finally {
+            setIsSending(false);
+        }
+    };
+
+    const deleteConversation = async (conversationId) => {
+        const out = await chatController.deleteConversation(conversationId);
+        const refreshed = await chatController.listConversations();
+        if (refreshed.success) setConversations(sortConversationsDesc(refreshed.data || []));
+        setMessages(chatController.getMessages());
+        setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
+        return out;
+    };
+
+    const newConversation = () => {
+        const out = chatController.startNewConversation();
+        setMessages(chatController.getMessages());
+        setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
+        return out;
+    };
+
     const clearChat = () => {
         chatController.clearChat();
         setMessages(chatController.getMessages());
+        setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
     };
 
-    return { messages, sendMessage, clearChat, cancel, editMessage, resendEditedMessage, isSending };
+    return {
+        messages,
+        sendMessage,
+        clearChat,
+        cancel,
+        editMessage,
+        resendEditedMessage,
+        isSending,
+        pendingInterrupt,
+        answerInterrupt,
+        conversations,
+        loadConversations,
+        openConversation,
+        deleteConversation,
+        newConversation,
+    };
 }

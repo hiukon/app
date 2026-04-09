@@ -731,7 +731,7 @@ class ChatController {
             agent_type: 'single',
             conversation_id: this.conversationId,
             run_id: this.runId,
-            resume: { interrupt_id: intr.id, payload: resumePayload },
+            resume: { interrupt_id: intr.id || intr.interrupt_id, payload: resumePayload },
             message_id: randomUuid(),
             context: defaultViewingContext(),
             user_time_zone:
@@ -766,6 +766,65 @@ class ChatController {
     /** Gán thread để joinConversation / tiếp tục hội thoại. */
     setConversationId(id) {
         this.conversationId = id || null;
+    }
+
+    getPendingInterrupt() {
+        return this.pendingInterrupt;
+    }
+
+    async listConversations() {
+        const token = apiClient.getAuthToken();
+        if (!token) return { success: false, error: 'Chưa đăng nhập (token).', data: [] };
+        const u = AuthService.getCurrentUser?.() || {};
+        try {
+            const json = await AgentApiService.listConversations(token, {
+                limit: 100,
+                offset: 0,
+                order: 'created_at',
+                direction: 'desc',
+                include_deleted: false,
+                user_id: u.user_id || u.id || undefined,
+                partner_id: u.partner_id || undefined,
+            });
+            const list = Array.isArray(json?.data) ? json.data : [];
+            return { success: true, data: list };
+        } catch (e) {
+            return { success: false, error: e.message, data: [] };
+        }
+    }
+
+    async openConversation(conversationId, onMessagesUpdate) {
+        this.setConversationId(conversationId);
+        return this.joinConversation(onMessagesUpdate);
+    }
+
+    async deleteConversation(conversationId) {
+        const token = apiClient.getAuthToken();
+        if (!token) return { success: false, error: 'Chưa đăng nhập (token).' };
+        try {
+            await AgentApiService.deleteConversation(token, conversationId);
+        } catch (e) {
+            if (this.conversationId === conversationId) this.clearChat();
+            return { success: false, error: e.message };
+        }
+        if (this.conversationId === conversationId) this.clearChat();
+        return { success: true };
+    }
+
+    startNewConversation() {
+        if (this._streamAbort) {
+            this._streamAbort.abort();
+            this._streamAbort = null;
+        }
+        this._runActive = false;
+        this._currentAssistantId = null;
+        this._clearWatchdog();
+        this.conversationId = null;
+        this.runId = null;
+        this.pendingInterrupt = null;
+        this.chatModel.clearMessages();
+        this.ensureWelcomeMessage();
+        return { success: true };
     }
 
     editUserMessage(messageId, newText) {

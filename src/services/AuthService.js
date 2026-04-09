@@ -1,4 +1,5 @@
 import apiClient from './api/apiClient';
+import * as SecureStore from 'expo-secure-store';
 
 import { CORE_API_URL, CORE_AUTH_PATHS, USE_MOCK_AUTH } from '../config/api.config';
 
@@ -42,6 +43,28 @@ class AuthService {
     constructor() {
         this._refreshToken = null;
         this._currentUser = null;
+        this._sessionKey = 'hanobrain_auth_session_v1';
+    }
+
+    async _saveSession() {
+        try {
+            const payload = {
+                accessToken: apiClient.getAuthToken(),
+                refreshToken: this._refreshToken,
+                user: this._currentUser,
+            };
+            await SecureStore.setItemAsync(this._sessionKey, JSON.stringify(payload));
+        } catch {
+            // ignore persistence errors
+        }
+    }
+
+    async _clearSessionStorage() {
+        try {
+            await SecureStore.deleteItemAsync(this._sessionKey);
+        } catch {
+            // ignore persistence errors
+        }
     }
 
     async _postCore(path, body) {
@@ -92,7 +115,13 @@ class AuthService {
             return { success: false, error: 'Phản hồi không có access_token' };
         }
 
-        this._currentUser = normalizeUser(data.user, id);
+        this._currentUser = {
+            ...normalizeUser(data.user, id),
+            role_id: data.role_id || data.user?.role_id,
+            partner_id: data.partner_id || data.user?.partner_id,
+            user_id: data.user?.id || data.user_id,
+        };
+        await this._saveSession();
         return {
             success: true,
             data: this._currentUser,
@@ -128,7 +157,13 @@ class AuthService {
 
         const data = json.data;
         if (data?.access_token && this._applyTokenBundle(data)) {
-            this._currentUser = normalizeUser(data.user, id);
+            this._currentUser = {
+                ...normalizeUser(data.user, id),
+                role_id: data.role_id || data.user?.role_id,
+                partner_id: data.partner_id || data.user?.partner_id,
+                user_id: data.user?.id || data.user_id,
+            };
+            await this._saveSession();
             return {
                 success: true,
                 data: this._currentUser,
@@ -166,14 +201,31 @@ class AuthService {
         if (!this._applyTokenBundle(json.data)) {
             return { success: false, error: 'Phản hồi refresh không có access_token' };
         }
+        await this._saveSession();
 
         return { success: true };
+    }
+
+    async bootstrapSession() {
+        try {
+            const raw = await SecureStore.getItemAsync(this._sessionKey);
+            if (!raw) return { success: false };
+            const data = JSON.parse(raw);
+            if (data?.accessToken) apiClient.setAuthToken(data.accessToken);
+            this._refreshToken = data?.refreshToken || null;
+            this._currentUser = data?.user || null;
+            if (!data?.accessToken || !this._currentUser) return { success: false };
+            return { success: true, data: this._currentUser };
+        } catch {
+            return { success: false };
+        }
     }
 
     async logout() {
         apiClient.setAuthToken(null);
         this._refreshToken = null;
         this._currentUser = null;
+        await this._clearSessionStorage();
         return { success: true };
     }
 

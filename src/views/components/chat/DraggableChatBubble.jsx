@@ -25,12 +25,36 @@ export default function DraggableChatBubble() {
     const offsetY = useSharedValue(0);
     const [modalVisible, setModalVisible] = useState(false);
     const [inputText, setInputText] = useState('');
-    const { messages, sendMessage, cancel, resendEditedMessage, isSending } = useChat();
+    const {
+        messages,
+        sendMessage,
+        cancel,
+        resendEditedMessage,
+        isSending,
+        pendingInterrupt,
+        answerInterrupt,
+        conversations,
+        loadConversations,
+        openConversation,
+        deleteConversation,
+        newConversation,
+    } = useChat();
     const [attachments, setAttachments] = useState([]);
     const [isUploading, setIsUploading] = useState(false);
     const [thinkingDots, setThinkingDots] = useState('');
     const [editingMessageId, setEditingMessageId] = useState(null);
+    const [showHistory, setShowHistory] = useState(false);
     const { scale } = useResponsive();
+    const sortedConversations = [...conversations].sort((a, b) =>
+        `${b?.updated_at || b?.created_at || ''}`.localeCompare(
+            `${a?.updated_at || a?.created_at || ''}`
+        )
+    );
+    const openHistory = async () => {
+        setShowHistory(true);
+        await loadConversations();
+    };
+
 
     useEffect(() => {
         const hasStreaming = messages.some(
@@ -211,6 +235,12 @@ export default function DraggableChatBubble() {
                             </Text>
                         </View>
                         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                            <TouchableOpacity onPress={newConversation} style={{ marginRight: 12 }}>
+                                <MaterialIcons name="add-comment" size={24} color="white" />
+                            </TouchableOpacity>
+                            <TouchableOpacity onPress={openHistory} style={{ marginRight: 12 }}>
+                                <MaterialIcons name="history" size={24} color="white" />
+                            </TouchableOpacity>
                             <TouchableOpacity onPress={() => setModalVisible(false)}>
                                 <MaterialIcons name="close" size={24} color="white" />
                             </TouchableOpacity>
@@ -225,6 +255,42 @@ export default function DraggableChatBubble() {
                         contentContainerStyle={{ padding: 16, flexGrow: 1 }}
                         showsVerticalScrollIndicator={false}
                     />
+
+                    {pendingInterrupt ? (
+                        <View
+                            style={{
+                                marginHorizontal: 12,
+                                marginTop: 8,
+                                backgroundColor: '#fff7ed',
+                                borderWidth: 1,
+                                borderColor: '#fdba74',
+                                borderRadius: 12,
+                                padding: 10,
+                            }}
+                        >
+                            <Text style={{ fontSize: 12, color: '#9a3412', marginBottom: 6 }}>
+                                {pendingInterrupt.question || 'Cần xác nhận'}
+                            </Text>
+                            <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+                                {(pendingInterrupt.options || ['Đồng ý', 'Từ chối']).map((opt) => (
+                                    <TouchableOpacity
+                                        key={opt}
+                                        onPress={() => answerInterrupt(opt)}
+                                        style={{
+                                            backgroundColor: '#fb923c',
+                                            borderRadius: 999,
+                                            paddingHorizontal: 10,
+                                            paddingVertical: 6,
+                                            marginRight: 8,
+                                            marginBottom: 6,
+                                        }}
+                                    >
+                                        <Text style={{ color: 'white', fontSize: 12 }}>{opt}</Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </View>
+                        </View>
+                    ) : null}
 
                     {/* Input */}
                     <View style={{
@@ -313,6 +379,65 @@ export default function DraggableChatBubble() {
                         </View>
                     ) : null}
                 </SafeAreaView>
+            </Modal>
+
+            <Modal visible={showHistory} animationType="slide" transparent>
+                <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' }}>
+                    <View style={{ backgroundColor: 'white', borderTopLeftRadius: 16, borderTopRightRadius: 16, maxHeight: '65%' }}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 14, borderBottomWidth: 1, borderBottomColor: '#e5e7eb' }}>
+                            <Text style={{ fontSize: 16, fontWeight: '600', color: '#111827' }}>Lịch sử hội thoại</Text>
+                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                <TouchableOpacity onPress={loadConversations} style={{ marginRight: 12 }}>
+                                    <MaterialIcons name="refresh" size={22} color="#374151" />
+                                </TouchableOpacity>
+                                <TouchableOpacity onPress={() => setShowHistory(false)}>
+                                    <MaterialIcons name="close" size={22} color="#374151" />
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+                        <FlatList
+                            data={sortedConversations}
+                            keyExtractor={(item, idx) => item.id || `${idx}`}
+                            renderItem={({ item }) => (
+                                <View
+                                    style={{
+                                        paddingHorizontal: 14,
+                                        paddingVertical: 12,
+                                        borderBottomWidth: 1,
+                                        borderBottomColor: '#f3f4f6',
+                                        flexDirection: 'row',
+                                        alignItems: 'center',
+                                        justifyContent: 'space-between',
+                                    }}
+                                >
+                                    <TouchableOpacity
+                                        onPress={async () => {
+                                            await openConversation(item.id);
+                                            setShowHistory(false);
+                                        }}
+                                        style={{ flex: 1, paddingRight: 8 }}
+                                    >
+                                        <Text style={{ fontSize: 14, color: '#111827' }}>
+                                            {item.title || item.id || 'Conversation'}
+                                        </Text>
+                                        <Text style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
+                                            {item.updated_at || item.created_at || ''}
+                                        </Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        onPress={() => deleteConversation(item.id)}
+                                        style={{ padding: 4 }}
+                                    >
+                                        <MaterialIcons name="delete-outline" size={20} color="#ef4444" />
+                                    </TouchableOpacity>
+                                </View>
+                            )}
+                            ListEmptyComponent={
+                                <Text style={{ padding: 14, color: '#6b7280' }}>Chưa có hội thoại.</Text>
+                            }
+                        />
+                    </View>
+                </View>
             </Modal>
         </>
     );

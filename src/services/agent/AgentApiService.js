@@ -23,11 +23,12 @@ class AgentApiService {
      * @returns {Promise<{ code?: number, message?: string, data?: any, pagination?: any }>}
      */
     async listConversations(token, query = {}) {
-        const u = new URL(`${this.baseUrl()}/api/v1/conversations`);
-        Object.entries(query).forEach(([k, v]) => {
-            if (v !== undefined && v !== null && v !== '') u.searchParams.set(k, String(v));
-        });
-        const res = await fetch(u.toString(), { headers: { Authorization: `Bearer ${token}` } });
+        const qs = Object.entries(query)
+            .filter(([, v]) => v !== undefined && v !== null && v !== '')
+            .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+            .join('&');
+        const url = `${this.baseUrl()}/api/v1/conversations${qs ? `?${qs}` : ''}`;
+        const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
         const json = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(json.message || json.msg || `HTTP ${res.status}`);
         return json;
@@ -83,11 +84,12 @@ class AgentApiService {
      * @param {string} [displayName]
      */
     buildArtifactGetUrl(conversationId, { type, name, content }) {
-        const u = new URL(`${this.baseUrl()}/api/v1/conversation/${conversationId}/artifact`);
-        u.searchParams.set('type', type);
-        u.searchParams.set('name', name);
-        u.searchParams.set('content', content);
-        return u.toString();
+        const qs = [
+            `type=${encodeURIComponent(type)}`,
+            `name=${encodeURIComponent(name)}`,
+            `content=${encodeURIComponent(content)}`,
+        ].join('&');
+        return `${this.baseUrl()}/api/v1/conversation/${conversationId}/artifact?${qs}`;
     }
 
     async uploadAttachment(token, file, displayName) {
