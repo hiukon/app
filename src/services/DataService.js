@@ -105,7 +105,53 @@ function normalizeOneStatisticsRow(row, unitName, index) {
     };
 }
 
+function unitKey(raw) {
+    return normalizeKhoiLabel(raw || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '');
+}
+
+function zeroStatisticsRow(unitName, index) {
+    return {
+        id: `${index + 1}`,
+        name: normalizeKhoiLabel(unitName),
+        cthQuaHan: 0,
+        cthSapQuaHan: 0,
+        cthTrongHan: 0,
+        htQuaHan: 0,
+        htDangKy: 0,
+        total: 0,
+        status: 'normal',
+    };
+}
+
+function ensureAllTaskUnits(rows = []) {
+    const map = new Map(
+        (rows || []).map((r, i) => [unitKey(r?.name || r?.title || `${i}`), r])
+    );
+    return TASK_UNITS.map((unit, i) => {
+        const hit = map.get(unitKey(unit));
+        if (!hit) return zeroStatisticsRow(unit, i);
+        return {
+            ...zeroStatisticsRow(unit, i),
+            ...hit,
+            id: hit.id || `${i + 1}`,
+            name: normalizeKhoiLabel(unit),
+        };
+    });
+}
+
 class DataService {
+    async _ensureAuthToken() {
+        const token = apiClient.getAuthToken();
+        if (token) return true;
+        const boot = await AuthService.bootstrapSession?.();
+        if (boot?.success && apiClient.getAuthToken()) return true;
+        return false;
+    }
+
     async getUserInfo() {
         const authUser = AuthService.getCurrentUser();
         if (authUser) return { success: true, data: authUser };
@@ -130,6 +176,10 @@ class DataService {
             };
         }
         try {
+            const ok = await this._ensureAuthToken();
+            if (!ok) {
+                return { success: false, error: 'Missing access token (login required)', data: null };
+            }
             const { records } = await ConnectorService.query(
                 SQL_QUERIES.overview,
                 undefined,
@@ -150,6 +200,10 @@ class DataService {
             };
         }
         try {
+            const ok = await this._ensureAuthToken();
+            if (!ok) {
+                return { success: false, error: 'Missing access token (login required)', data: null };
+            }
             // Ưu tiên định nghĩa theo filter nếu có (hỗ trợ gộp nhiều LOAICAPCHA).
             if (TASK_UNIT_DEFS?.length && SQL_QUERIES.statistics.includes('{{UNIT_FILTER}}')) {
                 const rows = [];
@@ -185,7 +239,10 @@ class DataService {
                 undefined,
                 { MONTHKEY: filters.monthKey }
             );
-            return { success: true, data: normalizeStatisticsRows(records || []) };
+            return {
+                success: true,
+                data: ensureAllTaskUnits(normalizeStatisticsRows(records || [])),
+            };
         } catch (e) {
             return { success: false, error: e.message, data: null };
         }
@@ -194,6 +251,8 @@ class DataService {
     async getNews() {
         if (USE_SQL_CONNECTOR && SQL_QUERIES.news) {
             try {
+                const ok = await this._ensureAuthToken();
+                if (!ok) return { success: true, data: DEFAULT_NEWS, warning: 'Missing access token' };
                 const { records } = await ConnectorService.query(SQL_QUERIES.news);
                 return { success: true, data: records || [] };
             } catch (e) {

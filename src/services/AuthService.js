@@ -1,5 +1,6 @@
 import apiClient from './api/apiClient';
 import * as SecureStore from 'expo-secure-store';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { CORE_API_URL, CORE_AUTH_PATHS, USE_MOCK_AUTH } from '../config/api.config';
 
@@ -48,12 +49,24 @@ class AuthService {
 
     async _saveSession() {
         try {
+            const u = this._currentUser || {};
             const payload = {
                 accessToken: apiClient.getAuthToken(),
                 refreshToken: this._refreshToken,
-                user: this._currentUser,
+                // Keep payload compact for SecureStore size limits.
+                user: {
+                    id: u.id || u.user_id || '',
+                    user_id: u.user_id || u.id || '',
+                    partner_id: u.partner_id || '',
+                    email: u.email || '',
+                    name: u.name || '',
+                    role: u.role || '',
+                    role_id: u.role_id || '',
+                },
             };
-            await SecureStore.setItemAsync(this._sessionKey, JSON.stringify(payload));
+            const raw = JSON.stringify(payload);
+            // Store in AsyncStorage to avoid SecureStore size limits with long JWTs.
+            await AsyncStorage.setItem(this._sessionKey, raw);
         } catch {
             // ignore persistence errors
         }
@@ -61,6 +74,7 @@ class AuthService {
 
     async _clearSessionStorage() {
         try {
+            await AsyncStorage.removeItem(this._sessionKey);
             await SecureStore.deleteItemAsync(this._sessionKey);
         } catch {
             // ignore persistence errors
@@ -208,7 +222,13 @@ class AuthService {
 
     async bootstrapSession() {
         try {
-            const raw = await SecureStore.getItemAsync(this._sessionKey);
+            let raw = null;
+            try {
+                raw = await SecureStore.getItemAsync(this._sessionKey);
+            } catch {
+                raw = null;
+            }
+            if (!raw) raw = await AsyncStorage.getItem(this._sessionKey);
             if (!raw) return { success: false };
             const data = JSON.parse(raw);
             if (data?.accessToken) apiClient.setAuthToken(data.accessToken);

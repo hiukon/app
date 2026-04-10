@@ -27,7 +27,7 @@ function monthLabel(d) {
 }
 
 export default function HomeScreen() {
-    const { user } = useAuth();
+    const { user, isLoading: authLoading } = useAuth();
     const [stats, setStats] = useState(() =>
         TASK_UNITS.map((name, i) => ({
             id: String(i + 1),
@@ -54,32 +54,34 @@ export default function HomeScreen() {
     const statCardWidth = (statContainerWidth - (statGap * (statColumns - 1))) / statColumns;
 
     useEffect(() => {
+        if (authLoading) return;
         loadData();
-    }, [selectedMonth, user?.email]);
+    }, [selectedMonth, user?.email, authLoading]);
 
     const loadData = async () => {
+        if (authLoading) return;
         try {
             setLoading(true);
             const monthKey = monthKeyFromDate(selectedMonth);
             const statRes = await StatController.loadStatistics({ monthKey });
-            if (statRes.success) setStats(statRes.data);
-            else {
-                // Luôn hiển thị 4 mục để UI không bị "mất" phần Nhận nhiệm vụ.
-                setStats(
-                    TASK_UNITS.map((name, i) => ({
-                        id: String(i + 1),
-                        name,
-                        title: name,
-                        cthQuaHan: 0,
-                        cthSapQuaHan: 0,
-                        cthTrongHan: 0,
-                        htQuaHan: 0,
-                        htDangKy: 0,
-                        total: 0,
-                        status: 'normal',
-                        color: '#2563eb',
-                    }))
-                );
+            const fallbackStats = TASK_UNITS.map((name, i) => ({
+                id: String(i + 1),
+                name,
+                title: name,
+                cthQuaHan: 0,
+                cthSapQuaHan: 0,
+                cthTrongHan: 0,
+                htQuaHan: 0,
+                htDangKy: 0,
+                total: 0,
+                status: 'normal',
+                color: '#2563eb',
+            }));
+            // Always keep mission boxes visible: failure OR empty success -> fallback boxes.
+            if (statRes.success && Array.isArray(statRes.data) && statRes.data.length > 0) {
+                setStats(statRes.data);
+            } else {
+                setStats(fallbackStats);
             }
         } finally {
             setLoading(false);

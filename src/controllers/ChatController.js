@@ -401,7 +401,7 @@ class ChatController {
                     last && last.status === 'streaming'
                         ? last.id
                         : this.chatModel.addMessage({ text: '', isUser: false, status: 'streaming' })
-                              .id;
+                            .id;
                 const current = this.chatModel.getMessages().find((m) => m.id === id);
                 const meta = current?.meta || {};
                 const thinkingText = `${meta.thinkingText || ''}${piece}`;
@@ -485,7 +485,7 @@ class ChatController {
                                 });
                                 onMessagesUpdate?.();
                             })
-                            .catch(() => {});
+                            .catch(() => { });
                     }
                 }
                 this.chatModel.updateMessage(last.id, { meta: { ...meta, artifacts: list } });
@@ -565,7 +565,7 @@ class ChatController {
                                 });
                                 onMessagesUpdate?.();
                             })
-                            .catch(() => {});
+                            .catch(() => { });
                     }
                 }
                 this._cleanupEmptyStreamingAssistants();

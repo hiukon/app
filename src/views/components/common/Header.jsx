@@ -17,7 +17,7 @@ export default function Header({ user }) {
     return (
         <View style={{
             marginHorizontal: scale(isTablet ? 16 : 12),
-            marginTop: scale(8),
+            marginTop: scale(24),
             borderRadius: scale(14),
             backgroundColor: '#1d4ed8',
             paddingHorizontal: scale(isTablet ? 18 : 14),
