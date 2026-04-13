@@ -64,7 +64,7 @@ class ChatController {
         this._lastEventAt = 0;
         this._watchdogTimer = null;
         this._runActive = false;
-        this._toolCalls = new Map(); // tool_call_id -> { id,name,argsText,resultText,is_error }
+        this._toolCalls = new Map();
         this._currentAssistantId = null;
     }
 
@@ -178,7 +178,7 @@ class ChatController {
     _buildJoinBody() {
         return {
             conversation_id: this.conversationId,
-            agent_type: "single ",
+            agent_type: "single",
         };
     }
 
@@ -186,6 +186,7 @@ class ChatController {
         epoch,
         token,
         body,
+        customUrl,
         onMessagesUpdate,
         allowReconnect,
         onSnapshot,
@@ -202,9 +203,11 @@ class ChatController {
             this._reconnectWithBackoff(epoch, onMessagesUpdate);
         });
 
+        const url = customUrl || `${this._agentBaseUrl()}/api/v1/messages`;
+
         try {
             await streamAgentMessage({
-                url: `${this._agentBaseUrl()}/api/v1/messages`,
+                url,
                 token,
                 body,
                 signal: ac.signal,
@@ -230,6 +233,7 @@ class ChatController {
                             epoch,
                             token: nextToken,
                             body,
+                            customUrl,
                             onMessagesUpdate,
                             allowReconnect,
                             onSnapshot,
@@ -251,97 +255,54 @@ class ChatController {
         }
     }
 
-    /**
-     * POST /messages không có message — nhận MESSAGES_SNAPSHOT + STATE_SNAPSHOT (§5.3).
-     * Không gọi từ UI mặc định; dùng khi cần đồng bộ thread.
-     */
     async _saveConversationToCache() {
-        console.log('💾 ===== SAVE TO CACHE START =====');
-        console.log('💾 conversationId:', this.conversationId);
-
-        if (!this.conversationId) {
-            console.log('❌ No conversationId, skip cache');
-            return;
-        }
-
+        if (!this.conversationId) return;
         try {
             const messages = this.chatModel.getMessages();
-            console.log('💾 messages count:', messages.length);
-
-            if (messages.length === 0) {
-                console.log('❌ No messages to cache');
-                return;
-            }
-
-            // Log preview messages
-            console.log('💾 messages preview:', messages.map(m => ({
-                isUser: m.isUser,
-                text: m.text?.substring(0, 20)
-            })));
-
-            const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+            if (messages.length === 0) return;
             await AsyncStorage.setItem(`conv_${this.conversationId}`, JSON.stringify(messages));
-            console.log('✅ Cached successfully:', this.conversationId, 'with', messages.length, 'messages');
-
-            // Verify save
-            const saved = await AsyncStorage.getItem(`conv_${this.conversationId}`);
-            console.log('💾 Verification - saved length:', saved?.length);
-
+            console.log('💾 Cached:', this.conversationId, messages.length);
         } catch (error) {
-            console.error('❌ Cache error:', error);
+            console.error('Cache error:', error);
         }
-        console.log('💾 ===== SAVE TO CACHE END =====');
     }
+
     async _loadConversationFromCache(conversationId) {
-        console.log('🔥🔥🔥 LOAD CACHE - looking for:', conversationId);
         try {
-            const AsyncStorage = require('@react-native-async-storage/async-storage').default;
             const cached = await AsyncStorage.getItem(`conv_${conversationId}`);
-            console.log('🔥🔥🔥 Cached exists:', !!cached);
             if (cached) {
                 const messages = JSON.parse(cached);
-                console.log('🔥🔥🔥 Messages count:', messages.length);
                 this.chatModel.clearMessages();
                 messages.forEach(msg => this.chatModel.addMessage(msg));
-                console.log('✅ Loaded from cache');
+                console.log('📦 Loaded from cache:', messages.length);
                 return true;
-            } else {
-                console.log('❌ No cache found for:', conversationId);
             }
         } catch (error) {
             console.error('Load cache error:', error);
         }
         return false;
     }
-    // Sửa joinConversation để dùng cache fallback
+
     async joinConversation(onMessagesUpdate) {
         if (!USE_AGENT_CHAT) {
-            console.log('❌ USE_AGENT_CHAT is false');
             return { messages: this.chatModel.getMessages() };
         }
 
         const token = apiClient.getAuthToken();
         if (!token) {
-            console.log('❌ No token');
             return { messages: this.chatModel.getMessages(), error: 'Chưa đăng nhập (token).' };
         }
 
         if (!this.conversationId) {
-            console.log('❌ No conversationId');
             return { messages: this.chatModel.getMessages(), error: 'Chưa có conversation_id.' };
         }
 
-        console.log('🔄 Joining conversation via POST /api/v1/messages:', this.conversationId);
-
-        // 1. Thử load từ cache trước
         const cached = await this._loadConversationFromCache(this.conversationId);
         if (cached) {
-            console.log('✅ Loaded from cache');
             onMessagesUpdate?.();
             return { messages: this.chatModel.getMessages() };
         }
 
-        // 2. Gọi API đúng theo tài liệu §5.3
         const epoch = this._bumpEpoch();
 
         try {
@@ -351,18 +312,16 @@ class ChatController {
                 body: {
                     conversation_id: this.conversationId,
                     message: "",
-                    agent_type: "single | group",
+                    agent_type: "single",
                 },
                 onMessagesUpdate,
                 allowReconnect: true,
                 onSnapshot: (list) => {
-                    console.log('📸 MESSAGES_SNAPSHOT received:', list?.length);
                     if (list && list.length > 0) {
                         const rows = mapSnapshotToChatRows(list);
                         this.chatModel.clearMessages();
                         rows.forEach((r) => this.chatModel.addMessage(r));
-                        // Lưu vào cache
-                        this._saveConversationToCache().catch(err => console.error('Cache error:', err));
+                        this._saveConversationToCache();
                     } else {
                         this.chatModel.clearMessages();
                         this.ensureWelcomeMessage();
@@ -370,9 +329,8 @@ class ChatController {
                     onMessagesUpdate?.();
                 },
             });
-            console.log('✅ _streamAgent completed');
         } catch (error) {
-            console.error('❌ _streamAgent error:', error);
+            console.error('Join error:', error);
             this.chatModel.clearMessages();
             this.ensureWelcomeMessage();
             onMessagesUpdate?.();
@@ -380,9 +338,10 @@ class ChatController {
 
         return { messages: this.chatModel.getMessages() };
     }
+
     _handleAgentEvent(ev, ctx) {
         const { onMessagesUpdate, onSnapshot } = ctx || {};
-        const type = String(ev?.type || '');
+
         switch (ev.type) {
             case 'RUN_STARTED':
                 if (ev.thread_id) this.conversationId = ev.thread_id;
@@ -390,38 +349,46 @@ class ChatController {
                 this._runActive = true;
                 this._currentAssistantId = null;
                 break;
+
             case 'STATE_SNAPSHOT': {
                 const run = ev.data?.run;
                 if (run?.id) this.runId = run.id;
                 const state = run?.state;
-                this._runActive =
-                    state === 'running' || state === 'pending' || state === 'interrupted';
+                this._runActive = state === 'running' || state === 'pending' || state === 'interrupted';
                 break;
             }
+
             case 'STATE_DELTA': {
-                // Minimal: keep watchdog alive; server may send deltas without text.
-                // If state is present, update runActive.
                 const run = ev.data?.run;
                 const state = run?.state;
                 if (state) {
-                    this._runActive =
-                        state === 'running' || state === 'pending' || state === 'interrupted';
+                    this._runActive = state === 'running' || state === 'pending' || state === 'interrupted';
                 }
                 break;
             }
-            case 'TEXT_MESSAGE_START': {
+
+            case 'TEXT_MESSAGE_START':
                 this._ensureStreamingPlaceholder();
                 onMessagesUpdate?.();
                 break;
-            }
+
             case 'TEXT_MESSAGE_CONTENT': {
-                if (ev.is_from_sub_run) break;
+                if (ev.is_from_sub_run) {
+                    const piece = readEventText(ev);
+                    if (piece && ev.tool_call_id) {
+                        const tc = this._toolCalls.get(ev.tool_call_id);
+                        if (tc) {
+                            const newResult = (tc.resultText || '') + piece;
+                            this._toolCalls.set(ev.tool_call_id, { ...tc, resultText: newResult });
+                            this._syncDelegateToLastAssistant(ev.tool_call_id, onMessagesUpdate);
+                        }
+                    }
+                    break;
+                }
                 const piece = readEventText(ev);
                 if (!piece) break;
                 this._ensureStreamingPlaceholder();
-                const cur = this.chatModel
-                    .getMessages()
-                    .find((m) => m.id === this._currentAssistantId);
+                const cur = this.chatModel.getMessages().find((m) => m.id === this._currentAssistantId);
                 this.chatModel.updateMessage(this._currentAssistantId, {
                     text: `${cur?.text || ''}${piece}`,
                     status: 'streaming',
@@ -429,8 +396,8 @@ class ChatController {
                 onMessagesUpdate?.();
                 break;
             }
+
             case 'TEXT_MESSAGE_END': {
-                console.log('📝 TEXT_MESSAGE_END - saving to cache');
                 const finalText = `${readEventText(ev) || ''}`.trim();
                 if (!this._currentAssistantId) {
                     if (!finalText) break;
@@ -441,9 +408,7 @@ class ChatController {
                     });
                     this._currentAssistantId = model.id;
                 } else {
-                    const cur = this.chatModel
-                        .getMessages()
-                        .find((m) => m.id === this._currentAssistantId);
+                    const cur = this.chatModel.getMessages().find((m) => m.id === this._currentAssistantId);
                     const nextText = `${cur?.text || ''}${finalText || ''}`.trim();
                     if (nextText) {
                         this.chatModel.updateMessage(this._currentAssistantId, {
@@ -456,12 +421,12 @@ class ChatController {
                 }
                 this._currentAssistantId = null;
                 this._cleanupEmptyStreamingAssistants();
-                this._saveConversationToCache().catch(err => console.error('Cache error:', err));
+                this._saveConversationToCache();
                 onMessagesUpdate?.();
                 break;
             }
+
             case 'TEXT_MESSAGE': {
-                // Some backends may emit a non-standard consolidated text event.
                 const txt = `${readEventText(ev) || ''}`.trim();
                 if (!txt) break;
                 this.chatModel.addMessage({
@@ -474,16 +439,15 @@ class ChatController {
                 onMessagesUpdate?.();
                 break;
             }
+
             case 'THINKING_TEXT_MESSAGE_CONTENT': {
                 const piece = readEventText(ev);
                 if (!piece) break;
                 const rows = this.chatModel.getMessages();
                 const last = rows.slice().reverse().find((m) => !m.isUser);
-                const id =
-                    last && last.status === 'streaming'
-                        ? last.id
-                        : this.chatModel.addMessage({ text: '', isUser: false, status: 'streaming' })
-                            .id;
+                const id = last && last.status === 'streaming'
+                    ? last.id
+                    : this.chatModel.addMessage({ text: '', isUser: false, status: 'streaming' }).id;
                 const current = this.chatModel.getMessages().find((m) => m.id === id);
                 const meta = current?.meta || {};
                 const thinkingText = `${meta.thinkingText || ''}${piece}`;
@@ -491,20 +455,16 @@ class ChatController {
                 onMessagesUpdate?.();
                 break;
             }
+
             case 'TOOL_CALL_START': {
                 const id = ev.tool_call_id || ev.toolCallId || ev.data?.tool_call_id;
                 const name = ev.tool_name || ev.toolName || ev.data?.tool_name;
                 if (!id) break;
-                this._toolCalls.set(id, {
-                    id,
-                    name,
-                    argsText: '',
-                    resultText: '',
-                    is_error: false,
-                });
+                this._toolCalls.set(id, { id, name, argsText: '', resultText: '', is_error: false });
                 this._syncToolCallToLastAssistant(id, onMessagesUpdate);
                 break;
             }
+
             case 'TOOL_CALL_ARGS': {
                 const id = ev.tool_call_id || ev.toolCallId || ev.data?.tool_call_id;
                 const tc = id ? this._toolCalls.get(id) : null;
@@ -514,6 +474,7 @@ class ChatController {
                 this._syncToolCallToLastAssistant(id, onMessagesUpdate);
                 break;
             }
+
             case 'TOOL_CALL_RESULT': {
                 const id = ev.tool_call_id || ev.toolCallId || ev.data?.tool_call_id;
                 const tc = id ? this._toolCalls.get(id) : null;
@@ -523,12 +484,45 @@ class ChatController {
                 this._syncToolCallToLastAssistant(id, onMessagesUpdate);
                 break;
             }
+
             case 'TOOL_CALL_END': {
                 const id = ev.tool_call_id || ev.toolCallId || ev.data?.tool_call_id;
                 if (!id) break;
                 this._syncToolCallToLastAssistant(id, onMessagesUpdate);
                 break;
             }
+
+            case 'DELEGATE_AGENT_START': {
+                const id = ev.tool_call_id || ev.toolCallId;
+                const name = ev.tool_name || ev.toolName || ev.agent;
+                if (!id) break;
+                this._toolCalls.set(id, { id, name, type: 'delegate', argsText: '', resultText: '', is_error: false });
+                this._syncDelegateToLastAssistant(id, onMessagesUpdate);
+                break;
+            }
+
+            case 'DELEGATE_AGENT_RESULT': {
+                const id = ev.tool_call_id || ev.toolCallId;
+                const tc = id ? this._toolCalls.get(id) : null;
+                if (!tc) break;
+                const resultText = ev.result != null ? String(ev.result) : tc.resultText || '';
+                this._toolCalls.set(id, { ...tc, resultText, is_error: !!ev.is_error });
+                this._syncDelegateToLastAssistant(id, onMessagesUpdate);
+                break;
+            }
+
+            case 'DELEGATE_AGENT_END': {
+                const id = ev.tool_call_id || ev.toolCallId;
+                if (!id) break;
+                const tc = this._toolCalls.get(id);
+                if (tc) {
+                    tc.status = 'completed';
+                    this._toolCalls.set(id, tc);
+                    this._syncDelegateToLastAssistant(id, onMessagesUpdate);
+                }
+                break;
+            }
+
             case 'THINKING_ARTIFACTS':
             case 'TEXT_MESSAGE_ARTIFACTS': {
                 const artifacts = ev.artifacts || ev.data?.artifacts;
@@ -541,7 +535,6 @@ class ChatController {
                 const token = apiClient.getAuthToken();
                 for (const a of artifacts) {
                     const base = { ...a };
-                    // Best-effort: build direct URL; later can upgrade to signed-url if backend requires it.
                     if (!base.url && this.conversationId && base.type && base.name && base.content) {
                         base.url = AgentApiService.buildArtifactGetUrl(this.conversationId, base);
                     }
@@ -555,12 +548,8 @@ class ChatController {
                                 const cur = now.find((m) => m.id === last.id);
                                 if (!cur) return;
                                 const curMeta = cur.meta || {};
-                                const curList = Array.isArray(curMeta.artifacts)
-                                    ? curMeta.artifacts.slice()
-                                    : [];
-                                const idx = curList.findIndex(
-                                    (x) => x.name === base.name && x.content === base.content
-                                );
+                                const curList = Array.isArray(curMeta.artifacts) ? curMeta.artifacts.slice() : [];
+                                const idx = curList.findIndex((x) => x.name === base.name && x.content === base.content);
                                 if (idx >= 0) curList[idx] = { ...curList[idx], url: signed };
                                 this.chatModel.updateMessage(last.id, {
                                     meta: { ...curMeta, artifacts: curList },
@@ -574,9 +563,9 @@ class ChatController {
                 onMessagesUpdate?.();
                 break;
             }
+
             case 'MESSAGES_SNAPSHOT': {
                 const list = ev.data?.messages;
-                console.log(' MESSAGES_SNAPSHOT event received:', list?.length, 'messages');
                 if (list?.length) {
                     if (typeof onSnapshot === 'function') {
                         onSnapshot(list);
@@ -589,6 +578,7 @@ class ChatController {
                 }
                 break;
             }
+
             case 'RUN_FINISHED':
                 this._runActive = false;
                 if (ev.outcome === 'interrupt' && ev.interrupt) {
@@ -604,14 +594,10 @@ class ChatController {
                     });
                 } else {
                     this.pendingInterrupt = null;
-                    // finalize current assistant message if stream closed without TEXT_MESSAGE_END.
                     if (this._currentAssistantId) {
-                        const cur = this.chatModel
-                            .getMessages()
-                            .find((m) => m.id === this._currentAssistantId);
+                        const cur = this.chatModel.getMessages().find((m) => m.id === this._currentAssistantId);
                         const fallbackText = readEventText(ev);
-                        const safeText =
-                            `${cur?.text || ''}`.trim() || `${fallbackText || ''}`.trim();
+                        const safeText = `${cur?.text || ''}`.trim() || `${fallbackText || ''}`.trim();
                         if (safeText) {
                             this.chatModel.updateMessage(this._currentAssistantId, {
                                 status: 'sent',
@@ -622,10 +608,7 @@ class ChatController {
                         }
                         this._currentAssistantId = null;
                     }
-                    // If run finished successfully but no assistant text was emitted, surface explicit info.
-                    const hasAssistantText = this.chatModel
-                        .getMessages()
-                        .some((m) => !m.isUser && `${m.text || ''}`.trim().length > 0);
+                    const hasAssistantText = this.chatModel.getMessages().some((m) => !m.isUser && `${m.text || ''}`.trim().length > 0);
                     if (!hasAssistantText && ev.outcome === 'success') {
                         this.chatModel.addMessage({
                             text: 'Run hoàn tất nhưng server không trả TEXT_MESSAGE_CONTENT/TEXT_MESSAGE_END.',
@@ -633,7 +616,6 @@ class ChatController {
                             status: 'error',
                         });
                     }
-                    // Best-effort: attach citations to last assistant message
                     const token = apiClient.getAuthToken();
                     const last = this.chatModel.getMessages().slice().reverse().find((m) => !m.isUser);
                     if (token && this.runId && last) {
@@ -651,17 +633,15 @@ class ChatController {
                             })
                             .catch(() => { });
                     }
-
-                    // ✅ Lưu cache - không cần await, gọi async nhưng không đợi
-                    this._saveConversationToCache().catch(err => console.error('Cache error:', err));
+                    this._saveConversationToCache();
                 }
                 this._cleanupEmptyStreamingAssistants();
                 onMessagesUpdate?.();
                 break;
+
             case 'RUN_ERROR':
             case 'ERROR': {
-                const errText =
-                    ev.result || ev.text || ev.data?.message || 'Đã xảy ra lỗi.';
+                const errText = ev.result || ev.text || ev.data?.message || 'Đã xảy ra lỗi.';
                 this._runActive = false;
                 this._currentAssistantId = null;
                 this._cleanupEmptyStreamingAssistants();
@@ -673,15 +653,16 @@ class ChatController {
                 onMessagesUpdate?.();
                 break;
             }
+
             case 'USER_CANCELLED':
                 this._runActive = false;
                 this._currentAssistantId = null;
                 this._cleanupEmptyStreamingAssistants();
                 onMessagesUpdate?.();
                 break;
+
             default:
-                // Defensive fallback: if backend emits unknown *TEXT* event with payload, still render it.
-                if (/TEXT/i.test(type)) {
+                if (/TEXT/i.test(ev.type)) {
                     const txt = `${readEventText(ev) || ''}`.trim();
                     if (txt) {
                         this.chatModel.addMessage({
@@ -694,6 +675,21 @@ class ChatController {
                 }
                 break;
         }
+    }
+
+    _syncDelegateToLastAssistant(toolCallId, onMessagesUpdate) {
+        const tc = this._toolCalls.get(toolCallId);
+        if (!tc) return;
+        const rows = this.chatModel.getMessages();
+        const last = rows.slice().reverse().find((m) => !m.isUser);
+        if (!last) return;
+        const meta = last.meta || {};
+        const list = Array.isArray(meta.delegateLog) ? meta.delegateLog.slice() : [];
+        const idx = list.findIndex((x) => x.id === toolCallId);
+        if (idx >= 0) list[idx] = { ...list[idx], ...tc };
+        else list.push({ ...tc, status: tc.status || 'running' });
+        this.chatModel.updateMessage(last.id, { meta: { ...meta, delegateLog: list } });
+        onMessagesUpdate?.();
     }
 
     _syncToolCallToLastAssistant(toolCallId, onMessagesUpdate) {
@@ -728,8 +724,7 @@ class ChatController {
 
         let userMessage = null;
         if (!options?.skipUserMessage) {
-            const userMeta =
-                options?.attachments?.length ? { attachments: options.attachments } : null;
+            const userMeta = options?.attachments?.length ? { attachments: options.attachments } : null;
             userMessage = this.chatModel.addMessage({
                 text,
                 isUser: true,
@@ -738,7 +733,6 @@ class ChatController {
             onMessagesUpdate?.();
         }
 
-        // Mapping UI model to server agent
         const AGENT_MODEL_MAPPING = {
             'intelligent': 'default',
             'document': 'doc_assistant',
@@ -748,7 +742,7 @@ class ChatController {
         const mappedAgent = AGENT_MODEL_MAPPING[selectedModel] || 'default';
 
         const body = {
-            agent: mappedAgent,  // ✅ Đã sửa
+            agent: mappedAgent,
             agent_type: 'single',
             message: text,
             message_id: randomUuid(),
@@ -779,9 +773,7 @@ class ChatController {
                 allowReconnect: true,
             });
         } catch (e) {
-            if (e.message === 'Aborted') {
-                // user manually stopped; keep UI silent
-            } else {
+            if (e.message !== 'Aborted') {
                 this.chatModel.addMessage({
                     text: `Xin lỗi, ${e.message}`,
                     isUser: false,
@@ -797,10 +789,6 @@ class ChatController {
         };
     }
 
-    /**
-     * HITL: POST với resume sau RUN_FINISHED outcome interrupt (§9.5).
-     * Gọi từ code tùy chỉnh (UI mặc định chưa có nút).
-     */
     async resumeAgentInterrupt(resumePayload, onMessagesUpdate) {
         if (!USE_AGENT_CHAT) return { messages: this.chatModel.getMessages() };
         const intr = this.pendingInterrupt;
@@ -831,8 +819,7 @@ class ChatController {
             resume: { interrupt_id: intr.id || intr.interrupt_id, payload: resumePayload },
             message_id: randomUuid(),
             context: defaultViewingContext(),
-            user_time_zone:
-                Intl.DateTimeFormat?.().resolvedOptions?.().timeZone || 'Asia/Ho_Chi_Minh',
+            user_time_zone: Intl.DateTimeFormat?.().resolvedOptions?.().timeZone || 'Asia/Ho_Chi_Minh',
         };
         const epoch = this._bumpEpoch();
 
@@ -845,9 +832,7 @@ class ChatController {
                 allowReconnect: true,
             });
         } catch (e) {
-            if (e.message === 'Aborted') {
-                // user manually stopped; keep UI silent
-            } else {
+            if (e.message !== 'Aborted') {
                 this.chatModel.addMessage({
                     text: `Xin lỗi, ${e.message}`,
                     isUser: false,
@@ -860,7 +845,6 @@ class ChatController {
         return { messages: this.chatModel.getMessages() };
     }
 
-    /** Gán thread để joinConversation / tiếp tục hội thoại. */
     setConversationId(id) {
         this.conversationId = id || null;
     }
@@ -871,9 +855,7 @@ class ChatController {
 
     async listConversations() {
         const token = apiClient.getAuthToken();
-        if (!token) {
-            return { success: false, error: 'Chưa đăng nhập (token).', data: [] };
-        }
+        if (!token) return { success: false, error: 'Chưa đăng nhập (token).', data: [] };
         const u = AuthService.getCurrentUser?.() || {};
         try {
             const json = await AgentApiService.listConversations(token, {
@@ -888,8 +870,42 @@ class ChatController {
             const list = Array.isArray(json?.data) ? json.data : [];
             return { success: true, data: list };
         } catch (e) {
-            console.error('Failed to list conversations:', e.message);
             return { success: false, error: e.message, data: [] };
+        }
+    }
+
+    async fetchConversationHistory(conversationId, onMessagesUpdate) {
+        const token = apiClient.getAuthToken();
+        if (!token) return;
+
+        const epoch = this._bumpEpoch();
+
+        try {
+            await this._streamAgent({
+                epoch,
+                token,
+                body: {},
+                customUrl: `${this._agentBaseUrl()}/api/v1/conversation/${conversationId}`,
+                onMessagesUpdate,
+                allowReconnect: false,
+                onSnapshot: (list) => {
+                    if (list && list.length > 0) {
+                        const rows = mapSnapshotToChatRows(list);
+                        this.chatModel.clearMessages();
+                        rows.forEach((r) => this.chatModel.addMessage(r));
+                        this._saveConversationToCache();
+                    } else {
+                        this.chatModel.clearMessages();
+                        this.ensureWelcomeMessage();
+                    }
+                    onMessagesUpdate?.();
+                },
+            });
+        } catch (error) {
+            console.error('Fetch history error:', error);
+            this.chatModel.clearMessages();
+            this.ensureWelcomeMessage();
+            onMessagesUpdate?.();
         }
     }
 
@@ -897,23 +913,18 @@ class ChatController {
         this.setConversationId(conversationId);
 
         const cached = await this._loadConversationFromCache(conversationId);
-
         if (cached) {
             onMessagesUpdate?.();
             return { messages: this.chatModel.getMessages() };
         }
 
-        this.chatModel.clearMessages();
-        this.ensureWelcomeMessage();
-        onMessagesUpdate?.();
+        await this.fetchConversationHistory(conversationId, onMessagesUpdate);
         return { messages: this.chatModel.getMessages() };
     }
 
     async deleteConversation(conversationId) {
         const token = apiClient.getAuthToken();
-        if (!token) {
-            return { success: false, error: 'Chưa đăng nhập (token).' };
-        }
+        if (!token) return { success: false, error: 'Chưa đăng nhập (token).' };
         try {
             await AgentApiService.deleteConversation(token, conversationId);
         } catch (e) {
@@ -964,11 +975,7 @@ class ChatController {
     }
 
     async _sendUserMessageLegacy(text, onMessagesUpdate) {
-        const userMessage = this.chatModel.addMessage({
-            text,
-            isUser: true,
-        });
-
+        const userMessage = this.chatModel.addMessage({ text, isUser: true });
         const response = await DataService.sendChatMessage(text);
 
         if (response.success) {
@@ -976,27 +983,24 @@ class ChatController {
                 text: response.data.reply,
                 isUser: false,
             });
-            const out = {
+            onMessagesUpdate?.();
+            return {
                 userMessage: userMessage.toJSON(),
                 botMessage: botMessage.toJSON(),
                 messages: this.chatModel.getMessages(),
             };
-            onMessagesUpdate?.();
-            return out;
         }
 
         const errorMessage = this.chatModel.addMessage({
-            text: `Lỗi chat fallback: ${response?.error || 'không rõ nguyên nhân'}. Bật EXPO_PUBLIC_USE_AGENT_CHAT=true để dùng SSE theo tài liệu.`,
+            text: `Lỗi chat fallback: ${response?.error || 'không rõ nguyên nhân'}. Bật EXPO_PUBLIC_USE_AGENT_CHAT=true để dùng SSE.`,
             isUser: false,
         });
-
-        const failOut = {
+        onMessagesUpdate?.();
+        return {
             userMessage: userMessage.toJSON(),
             botMessage: errorMessage.toJSON(),
             messages: this.chatModel.getMessages(),
         };
-        onMessagesUpdate?.();
-        return failOut;
     }
 
     getMessages() {
@@ -1019,9 +1023,6 @@ class ChatController {
         this.ensureWelcomeMessage();
     }
 
-    /**
-     * Stop current run: abort SSE and call server cancel endpoint (§5.4).
-     */
     async cancelCurrentRun(onMessagesUpdate) {
         if (this._streamAbort) {
             this._streamAbort.abort();
@@ -1038,7 +1039,7 @@ class ChatController {
             try {
                 await AgentApiService.cancelConversation(token, this.conversationId);
             } catch {
-                // ignore; user already stopped locally
+                // ignore
             }
         }
         onMessagesUpdate?.();
