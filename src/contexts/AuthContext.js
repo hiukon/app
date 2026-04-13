@@ -1,5 +1,6 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import AuthService from '../services/AuthService';
+import apiClient from '../services/api/apiClient';
 
 const AuthContext = createContext();
 
@@ -12,7 +13,10 @@ export function AuthProvider({ children }) {
         (async () => {
             setIsLoading(true);
             const res = await AuthService.bootstrapSession();
-            if (mounted && res.success && res.data) setUser(res.data);
+            // Only set user if bootstrap succeeded AND token is actually in memory
+            if (mounted && res.success && res.data && apiClient.getAuthToken()) {
+                setUser(res.data);
+            }
             if (mounted) setIsLoading(false);
         })();
         return () => {
@@ -24,7 +28,8 @@ export function AuthProvider({ children }) {
     const login = async (email, password) => {
         setIsLoading(true);
         const result = await AuthService.login(email, password);
-        if (result.success) {
+        // Verify token was actually set before marking user as logged in
+        if (result.success && apiClient.getAuthToken()) {
             setUser(result.data);
         }
         setIsLoading(false);
@@ -34,7 +39,8 @@ export function AuthProvider({ children }) {
     const register = async (email, password) => {
         setIsLoading(true);
         const result = await AuthService.register(email, password);
-        if (result.success && result.data) {
+        // Verify token was actually set before marking user as logged in
+        if (result.success && result.data && apiClient.getAuthToken()) {
             setUser(result.data);
         }
         setIsLoading(false);

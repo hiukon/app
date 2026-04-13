@@ -9,23 +9,34 @@ export function useChat() {
         chatController.getPendingInterrupt?.() || null
     );
     const [conversations, setConversations] = useState([]);
+
     const toInterruptPayload = (interrupt, input) => {
         const reason = `${interrupt?.reason || ''}`.toLowerCase();
         const value = `${input || ''}`.trim();
-        if (reason === 'human_approval' || reason === 'database_modification' || reason === 'multi_step_confirm') {
-            const yes = /^(yes|y|approve|đồng ý|dong y|ok)$/i.test(value);
-            return { action: yes ? 'approve' : 'reject', answer: value || undefined };
-        }
-        if (reason === 'error_recovery') {
-            if (/retry/i.test(value)) return { action: 'retry' };
-            if (/skip/i.test(value)) return { action: 'skip' };
-            if (/abort|huy|cancel/i.test(value)) return { action: 'abort' };
-            return { action: 'retry' };
-        }
-        // upload_required / information_gathering and others
-        return { answer: value };
-    };
 
+        switch (reason) {
+            case 'human_approval':
+            case 'database_modification':
+            case 'multi_step_confirm':
+                const yes = /^(yes|y|approve|đồng ý|dong y|ok|có)$/i.test(value);
+                return { action: yes ? 'approve' : 'reject', answer: value };
+
+            case 'error_recovery':
+                if (/retry|thử lại/i.test(value)) return { action: 'retry' };
+                if (/skip|bỏ qua/i.test(value)) return { action: 'skip' };
+                if (/abort|hủy|cancel|thoát/i.test(value)) return { action: 'abort' };
+                return { action: 'retry' };
+
+            case 'upload_required':
+                return { action: 'upload', answer: value };
+
+            case 'information_gathering':
+                return { action: 'provide', answer: value };
+
+            default:
+                return { answer: value };
+        }
+    };
 
     const sortConversationsDesc = (list = []) =>
         [...list].sort((a, b) =>
@@ -82,7 +93,7 @@ export function useChat() {
                 setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
             };
             const result = await chatController.sendUserMessage(newText.trim(), bump, {
-                skipUserMessage: true,
+                skipUserMessage: false,
             });
             setMessages(chatController.getMessages());
             setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
@@ -112,7 +123,12 @@ export function useChat() {
 
     const loadConversations = async () => {
         const out = await chatController.listConversations();
-        if (out.success) setConversations(sortConversationsDesc(out.data || []));
+        if (out.success) {
+            const sorted = sortConversationsDesc(out.data || []);
+            setConversations(sorted);
+        } else {
+            setConversations([]);
+        }
         return out;
     };
 

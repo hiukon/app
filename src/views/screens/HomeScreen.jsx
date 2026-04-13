@@ -115,7 +115,7 @@ export default function HomeScreen() {
             >
                 <Header />
 
-                
+
 
                 <View style={{ marginTop: scale(22), paddingHorizontal: statSectionPadding }}>
                     <View style={{

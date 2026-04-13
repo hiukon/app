@@ -13,10 +13,13 @@ import { PanGestureHandler, State } from 'react-native-gesture-handler';
 import Animated, { useSharedValue, useAnimatedStyle, withSpring } from 'react-native-reanimated';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useChat } from '../../../hooks/useChat';
+import { useVoiceChat } from '../../../hooks/useVoiceChat';
 import { useResponsive } from '../../../hooks/useResponsive';
 import * as DocumentPicker from 'expo-document-picker';
 import apiClient from '../../../services/api/apiClient';
 import AgentApiService from '../../../services/agent/AgentApiService';
+import ModelPickerModal from './ModelPickerModal';
+import { removeTriggerTokens } from '../../../utils/triggerParser';
 
 export default function DraggableChatBubble() {
     const translateX = useSharedValue(0);
@@ -25,6 +28,31 @@ export default function DraggableChatBubble() {
     const offsetY = useSharedValue(0);
     const [modalVisible, setModalVisible] = useState(false);
     const [inputText, setInputText] = useState('');
+    const [selectedModel, setSelectedModel] = useState('intelligent'); // ✅ Thêm state cho model
+    const [showModelPicker, setShowModelPicker] = useState(false); // ✅ Thêm state cho model picker
+
+    const formatVietnamTime = (dateString) => {
+        if (!dateString) return '';
+
+        try {
+            // Bỏ qua nếu là conversation ID
+            if (typeof dateString === 'string' && dateString.startsWith('01k')) {
+                return '';
+            }
+
+            const date = new Date(dateString);
+            if (isNaN(date.getTime())) return '';
+
+            const day = date.getDate().toString().padStart(2, '0');
+            const month = (date.getMonth() + 1).toString().padStart(2, '0');
+            const hours = date.getHours().toString().padStart(2, '0');
+            const minutes = date.getMinutes().toString().padStart(2, '0');
+
+            return `${day}/${month} ${hours}:${minutes}`;
+        } catch (e) {
+            return '';
+        }
+    };
     const {
         messages,
         sendMessage,
@@ -39,22 +67,28 @@ export default function DraggableChatBubble() {
         deleteConversation,
         newConversation,
     } = useChat();
+
+    const { isListening, toggleListening } = useVoiceChat({
+        onTranscript: (text) => setInputText(text),
+    });
+
     const [attachments, setAttachments] = useState([]);
     const [isUploading, setIsUploading] = useState(false);
     const [thinkingDots, setThinkingDots] = useState('');
     const [editingMessageId, setEditingMessageId] = useState(null);
     const [showHistory, setShowHistory] = useState(false);
     const { scale } = useResponsive();
+
     const sortedConversations = [...conversations].sort((a, b) =>
         `${b?.updated_at || b?.created_at || ''}`.localeCompare(
             `${a?.updated_at || a?.created_at || ''}`
         )
     );
+
     const openHistory = async () => {
         setShowHistory(true);
         await loadConversations();
     };
-
 
     useEffect(() => {
         const hasStreaming = messages.some(
@@ -105,7 +139,7 @@ export default function DraggableChatBubble() {
         setInputText('');
         const pending = attachments;
         setAttachments([]);
-        await sendMessage(currentMessage, { attachments: pending });
+        await sendMessage(currentMessage, { attachments: pending, agentModel: selectedModel }); // ✅ Truyền model
     };
 
     const pickFile = async () => {
@@ -148,10 +182,9 @@ export default function DraggableChatBubble() {
     };
 
     const renderMessage = ({ item }) => {
-        const visibleText =
-            item.status === 'streaming' && !item.isUser && !`${item.text || ''}`.trim()
-                ? `Đang suy nghĩ${thinkingDots}`
-                : item.text;
+        const visibleText = item.status === 'streaming' && !item.isUser && !`${item.text || ''}`.trim()
+            ? `Đang suy nghĩ${thinkingDots}`
+            : removeTriggerTokens(item.text || '');
         return (
             <TouchableOpacity
                 activeOpacity={item.isUser ? 0.9 : 1}
@@ -161,10 +194,10 @@ export default function DraggableChatBubble() {
                     setInputText(item.text || '');
                 }}
                 style={{
-                flexDirection: 'row',
-                justifyContent: item.isUser ? 'flex-end' : 'flex-start',
-                marginBottom: 12,
-            }}>
+                    flexDirection: 'row',
+                    justifyContent: item.isUser ? 'flex-end' : 'flex-start',
+                    marginBottom: 12,
+                }}>
                 <View style={{
                     maxWidth: '80%',
                     backgroundColor: item.isUser ? '#2563eb' : '#e5e7eb',
@@ -233,6 +266,18 @@ export default function DraggableChatBubble() {
                             <Text style={{ color: 'white', fontSize: 18, fontWeight: 'bold', marginLeft: 8 }}>
                                 Trợ lý AI HaNoiBrain
                             </Text>
+                            {/* ✅ Hiển thị model đang chọn */}
+                            <View style={{
+                                marginLeft: 8,
+                                backgroundColor: 'rgba(255,255,255,0.2)',
+                                paddingHorizontal: 6,
+                                paddingVertical: 2,
+                                borderRadius: 12,
+                            }}>
+                                <Text style={{ color: 'white', fontSize: 10 }}>
+                                    {selectedModel === 'intelligent' ? 'Thông minh' : selectedModel === 'document' ? 'Tài liệu' : 'Dữ liệu'}
+                                </Text>
+                            </View>
                         </View>
                         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                             <TouchableOpacity onPress={newConversation} style={{ marginRight: 12 }}>
@@ -292,7 +337,7 @@ export default function DraggableChatBubble() {
                         </View>
                     ) : null}
 
-                    {/* Input */}
+                    {/* Input - Đã thêm nút mic và nút chọn model */}
                     <View style={{
                         flexDirection: 'row',
                         padding: 12,
@@ -300,7 +345,9 @@ export default function DraggableChatBubble() {
                         borderTopWidth: 1,
                         borderTopColor: '#e5e7eb',
                         alignItems: 'center',
+                        gap: 8,
                     }}>
+                        {/* Nút attach file */}
                         <TouchableOpacity
                             onPress={pickFile}
                             disabled={isUploading || isSending}
@@ -311,34 +358,77 @@ export default function DraggableChatBubble() {
                                 alignItems: 'center',
                                 justifyContent: 'center',
                                 backgroundColor: isUploading || isSending ? '#d1d5db' : '#e5e7eb',
-                                marginRight: 8,
                             }}
                         >
                             <MaterialIcons name="attach-file" size={20} color="#374151" />
                         </TouchableOpacity>
-                        <TextInput
+
+                        {/* ✅ Nút mic */}
+                        <TouchableOpacity
+                            onPress={toggleListening}
+                            disabled={isUploading || isSending}
                             style={{
-                                flex: 1,
-                                borderWidth: 1,
-                                borderColor: '#d1d5db',
-                                borderRadius: 24,
-                                paddingHorizontal: 16,
-                                paddingVertical: 8,
-                                fontSize: 14,
-                                backgroundColor: 'white',
-                                maxHeight: 100,
+                                width: 40,
+                                height: 40,
+                                borderRadius: 20,
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                backgroundColor: isUploading || isSending
+                                    ? '#d1d5db'
+                                    : isListening
+                                        ? '#fecaca'
+                                        : '#e5e7eb',
                             }}
-                            placeholder={editingMessageId ? 'Sửa tin nhắn...' : 'Nhập tin nhắn...'}
-                            value={inputText}
-                            onChangeText={setInputText}
-                            multiline
-                        />
+                        >
+                            <MaterialIcons
+                                name="mic"
+                                size={20}
+                                color={isListening ? '#b91c1c' : '#374151'}
+                            />
+                        </TouchableOpacity>
+
+                        {/* TextInput */}
+                        <View style={{ flex: 1, position: 'relative' }}>
+                            <TextInput
+                                style={{
+                                    borderWidth: 1,
+                                    borderColor: '#d1d5db',
+                                    borderRadius: 24,
+                                    paddingHorizontal: 16,
+                                    paddingVertical: 8,
+                                    paddingRight: 40,
+                                    fontSize: 14,
+                                    backgroundColor: 'white',
+                                    maxHeight: 100,
+                                }}
+                                placeholder={editingMessageId ? 'Sửa tin nhắn...' : 'Nhập tin nhắn...'}
+                                value={inputText}
+                                onChangeText={setInputText}
+                                multiline
+                            />
+                            {/* ✅ Nút chọn model */}
+                            <TouchableOpacity
+                                onPress={() => setShowModelPicker(true)}
+                                style={{
+                                    position: 'absolute',
+                                    right: 12,
+                                    top: 8,
+                                    width: 24,
+                                    height: 24,
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                }}
+                            >
+                                <MaterialIcons name="tune" size={18} color="#2563eb" />
+                            </TouchableOpacity>
+                        </View>
+
+                        {/* Nút send/stop */}
                         {isSending ? (
                             <TouchableOpacity
                                 onPress={cancel}
                                 style={{
                                     backgroundColor: '#dc2626',
-                                    marginLeft: 8,
                                     width: 40,
                                     height: 40,
                                     borderRadius: 20,
@@ -354,7 +444,6 @@ export default function DraggableChatBubble() {
                                 disabled={isUploading || !inputText.trim()}
                                 style={{
                                     backgroundColor: isUploading || !inputText.trim() ? '#9ca3af' : '#2563eb',
-                                    marginLeft: 8,
                                     width: 40,
                                     height: 40,
                                     borderRadius: 20,
@@ -371,6 +460,7 @@ export default function DraggableChatBubble() {
                         )}
                     </View>
 
+                    {/* Hiển thị attachments */}
                     {attachments.length ? (
                         <View style={{ paddingHorizontal: 16, paddingBottom: 12, backgroundColor: 'white' }}>
                             <Text style={{ fontSize: 12, color: '#6b7280' }}>
@@ -381,6 +471,7 @@ export default function DraggableChatBubble() {
                 </SafeAreaView>
             </Modal>
 
+            {/* Modal lịch sử */}
             <Modal visible={showHistory} animationType="slide" transparent>
                 <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' }}>
                     <View style={{ backgroundColor: 'white', borderTopLeftRadius: 16, borderTopRightRadius: 16, maxHeight: '65%' }}>
@@ -418,10 +509,10 @@ export default function DraggableChatBubble() {
                                         style={{ flex: 1, paddingRight: 8 }}
                                     >
                                         <Text style={{ fontSize: 14, color: '#111827' }}>
-                                            {item.title || item.id || 'Conversation'}
+                                            {removeTriggerTokens(item.title) || item.id || 'Conversation'}
                                         </Text>
                                         <Text style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
-                                            {item.updated_at || item.created_at || ''}
+                                            {formatVietnamTime(item.updated_at || item.created_at)}
                                         </Text>
                                     </TouchableOpacity>
                                     <TouchableOpacity
@@ -439,6 +530,14 @@ export default function DraggableChatBubble() {
                     </View>
                 </View>
             </Modal>
+
+            {/* ✅ Model Picker Modal */}
+            <ModelPickerModal
+                visible={showModelPicker}
+                selectedModel={selectedModel}
+                onSelectModel={setSelectedModel}
+                onClose={() => setShowModelPicker(false)}
+            />
         </>
     );
 }

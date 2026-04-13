@@ -6,6 +6,7 @@ import { streamAgentMessage } from '../services/agent/streamAgentMessage';
 import { mapSnapshotToChatRows } from '../services/agent/snapshotMessages';
 import AgentApiService from '../services/agent/AgentApiService';
 import AuthService from '../services/AuthService';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 function isLikelyAuthFailure(status, msg) {
     if (status === 401 || status === 403) return true;
@@ -175,15 +176,10 @@ class ChatController {
     }
 
     _buildJoinBody() {
-        const body = {
-            agent: resolvedAgentCode(),
-            agent_type: 'single',
+        return {
             conversation_id: this.conversationId,
-            message_id: randomUuid(),
-            user_time_zone:
-                Intl.DateTimeFormat?.().resolvedOptions?.().timeZone || 'Asia/Ho_Chi_Minh',
+            agent_type: "single ",
         };
-        return body;
     }
 
     async _streamAgent({
@@ -259,47 +255,131 @@ class ChatController {
      * POST /messages không có message — nhận MESSAGES_SNAPSHOT + STATE_SNAPSHOT (§5.3).
      * Không gọi từ UI mặc định; dùng khi cần đồng bộ thread.
      */
+    async _saveConversationToCache() {
+        console.log('💾 ===== SAVE TO CACHE START =====');
+        console.log('💾 conversationId:', this.conversationId);
+
+        if (!this.conversationId) {
+            console.log('❌ No conversationId, skip cache');
+            return;
+        }
+
+        try {
+            const messages = this.chatModel.getMessages();
+            console.log('💾 messages count:', messages.length);
+
+            if (messages.length === 0) {
+                console.log('❌ No messages to cache');
+                return;
+            }
+
+            // Log preview messages
+            console.log('💾 messages preview:', messages.map(m => ({
+                isUser: m.isUser,
+                text: m.text?.substring(0, 20)
+            })));
+
+            const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+            await AsyncStorage.setItem(`conv_${this.conversationId}`, JSON.stringify(messages));
+            console.log('✅ Cached successfully:', this.conversationId, 'with', messages.length, 'messages');
+
+            // Verify save
+            const saved = await AsyncStorage.getItem(`conv_${this.conversationId}`);
+            console.log('💾 Verification - saved length:', saved?.length);
+
+        } catch (error) {
+            console.error('❌ Cache error:', error);
+        }
+        console.log('💾 ===== SAVE TO CACHE END =====');
+    }
+    async _loadConversationFromCache(conversationId) {
+        console.log('🔥🔥🔥 LOAD CACHE - looking for:', conversationId);
+        try {
+            const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+            const cached = await AsyncStorage.getItem(`conv_${conversationId}`);
+            console.log('🔥🔥🔥 Cached exists:', !!cached);
+            if (cached) {
+                const messages = JSON.parse(cached);
+                console.log('🔥🔥🔥 Messages count:', messages.length);
+                this.chatModel.clearMessages();
+                messages.forEach(msg => this.chatModel.addMessage(msg));
+                console.log('✅ Loaded from cache');
+                return true;
+            } else {
+                console.log('❌ No cache found for:', conversationId);
+            }
+        } catch (error) {
+            console.error('Load cache error:', error);
+        }
+        return false;
+    }
+    // Sửa joinConversation để dùng cache fallback
     async joinConversation(onMessagesUpdate) {
-        if (!USE_AGENT_CHAT) return { messages: this.chatModel.getMessages() };
+        if (!USE_AGENT_CHAT) {
+            console.log('❌ USE_AGENT_CHAT is false');
+            return { messages: this.chatModel.getMessages() };
+        }
+
         const token = apiClient.getAuthToken();
         if (!token) {
+            console.log('❌ No token');
             return { messages: this.chatModel.getMessages(), error: 'Chưa đăng nhập (token).' };
         }
+
         if (!this.conversationId) {
+            console.log('❌ No conversationId');
             return { messages: this.chatModel.getMessages(), error: 'Chưa có conversation_id.' };
         }
 
+        console.log('🔄 Joining conversation via POST /api/v1/messages:', this.conversationId);
+
+        // 1. Thử load từ cache trước
+        const cached = await this._loadConversationFromCache(this.conversationId);
+        if (cached) {
+            console.log('✅ Loaded from cache');
+            onMessagesUpdate?.();
+            return { messages: this.chatModel.getMessages() };
+        }
+
+        // 2. Gọi API đúng theo tài liệu §5.3
         const epoch = this._bumpEpoch();
+
         try {
             await this._streamAgent({
                 epoch,
                 token,
-                body: this._buildJoinBody(),
+                body: {
+                    conversation_id: this.conversationId,
+                    message: "",
+                    agent_type: "single | group",
+                },
                 onMessagesUpdate,
                 allowReconnect: true,
                 onSnapshot: (list) => {
-                    const rows = mapSnapshotToChatRows(list);
-                    this.chatModel.clearMessages();
-                    rows.forEach((r) => this.chatModel.addMessage(r));
+                    console.log('📸 MESSAGES_SNAPSHOT received:', list?.length);
+                    if (list && list.length > 0) {
+                        const rows = mapSnapshotToChatRows(list);
+                        this.chatModel.clearMessages();
+                        rows.forEach((r) => this.chatModel.addMessage(r));
+                        // Lưu vào cache
+                        this._saveConversationToCache().catch(err => console.error('Cache error:', err));
+                    } else {
+                        this.chatModel.clearMessages();
+                        this.ensureWelcomeMessage();
+                    }
                     onMessagesUpdate?.();
                 },
             });
-        } catch (e) {
-            if (e.message !== 'Aborted') {
-                this.chatModel.addMessage({
-                    text: `Kết nối bị gián đoạn: ${e.message}`,
-                    isUser: false,
-                    status: 'error',
-                });
-                onMessagesUpdate?.();
-            }
-        } finally {
-            // no-op
+            console.log('✅ _streamAgent completed');
+        } catch (error) {
+            console.error('❌ _streamAgent error:', error);
+            this.chatModel.clearMessages();
+            this.ensureWelcomeMessage();
+            onMessagesUpdate?.();
         }
 
         return { messages: this.chatModel.getMessages() };
     }
-
     _handleAgentEvent(ev, ctx) {
         const { onMessagesUpdate, onSnapshot } = ctx || {};
         const type = String(ev?.type || '');
@@ -350,6 +430,7 @@ class ChatController {
                 break;
             }
             case 'TEXT_MESSAGE_END': {
+                console.log('📝 TEXT_MESSAGE_END - saving to cache');
                 const finalText = `${readEventText(ev) || ''}`.trim();
                 if (!this._currentAssistantId) {
                     if (!finalText) break;
@@ -375,6 +456,7 @@ class ChatController {
                 }
                 this._currentAssistantId = null;
                 this._cleanupEmptyStreamingAssistants();
+                this._saveConversationToCache().catch(err => console.error('Cache error:', err));
                 onMessagesUpdate?.();
                 break;
             }
@@ -494,9 +576,11 @@ class ChatController {
             }
             case 'MESSAGES_SNAPSHOT': {
                 const list = ev.data?.messages;
+                console.log(' MESSAGES_SNAPSHOT event received:', list?.length, 'messages');
                 if (list?.length) {
-                    if (typeof onSnapshot === 'function') onSnapshot(list);
-                    else {
+                    if (typeof onSnapshot === 'function') {
+                        onSnapshot(list);
+                    } else {
                         const rows = mapSnapshotToChatRows(list);
                         this.chatModel.clearMessages();
                         rows.forEach((r) => this.chatModel.addMessage(r));
@@ -567,6 +651,9 @@ class ChatController {
                             })
                             .catch(() => { });
                     }
+
+                    // ✅ Lưu cache - không cần await, gọi async nhưng không đợi
+                    this._saveConversationToCache().catch(err => console.error('Cache error:', err));
                 }
                 this._cleanupEmptyStreamingAssistants();
                 onMessagesUpdate?.();
@@ -651,15 +738,24 @@ class ChatController {
             onMessagesUpdate?.();
         }
 
+        // Mapping UI model to server agent
+        const AGENT_MODEL_MAPPING = {
+            'intelligent': 'default',
+            'document': 'doc_assistant',
+            'data': 'data_analyst',
+        };
+        const selectedModel = options?.agentModel || options?.model || 'intelligent';
+        const mappedAgent = AGENT_MODEL_MAPPING[selectedModel] || 'default';
+
         const body = {
-            agent: resolvedAgentCode(),
+            agent: mappedAgent,  // ✅ Đã sửa
             agent_type: 'single',
             message: text,
             message_id: randomUuid(),
             context: defaultViewingContext(),
-            user_time_zone:
-                Intl.DateTimeFormat?.().resolvedOptions?.().timeZone || 'Asia/Ho_Chi_Minh',
+            user_time_zone: Intl.DateTimeFormat?.().resolvedOptions?.().timeZone || 'Asia/Ho_Chi_Minh',
         };
+
         if (options?.attachments?.length) {
             body.context = {
                 ...(body.context || {}),
@@ -669,6 +765,7 @@ class ChatController {
         if (!options?.forceNewConversation && this.conversationId) {
             body.conversation_id = this.conversationId;
         }
+
         const epoch = this._bumpEpoch();
 
         try {
@@ -774,7 +871,9 @@ class ChatController {
 
     async listConversations() {
         const token = apiClient.getAuthToken();
-        if (!token) return { success: false, error: 'Chưa đăng nhập (token).', data: [] };
+        if (!token) {
+            return { success: false, error: 'Chưa đăng nhập (token).', data: [] };
+        }
         const u = AuthService.getCurrentUser?.() || {};
         try {
             const json = await AgentApiService.listConversations(token, {
@@ -789,18 +888,32 @@ class ChatController {
             const list = Array.isArray(json?.data) ? json.data : [];
             return { success: true, data: list };
         } catch (e) {
+            console.error('Failed to list conversations:', e.message);
             return { success: false, error: e.message, data: [] };
         }
     }
 
     async openConversation(conversationId, onMessagesUpdate) {
         this.setConversationId(conversationId);
-        return this.joinConversation(onMessagesUpdate);
+
+        const cached = await this._loadConversationFromCache(conversationId);
+
+        if (cached) {
+            onMessagesUpdate?.();
+            return { messages: this.chatModel.getMessages() };
+        }
+
+        this.chatModel.clearMessages();
+        this.ensureWelcomeMessage();
+        onMessagesUpdate?.();
+        return { messages: this.chatModel.getMessages() };
     }
 
     async deleteConversation(conversationId) {
         const token = apiClient.getAuthToken();
-        if (!token) return { success: false, error: 'Chưa đăng nhập (token).' };
+        if (!token) {
+            return { success: false, error: 'Chưa đăng nhập (token).' };
+        }
         try {
             await AgentApiService.deleteConversation(token, conversationId);
         } catch (e) {

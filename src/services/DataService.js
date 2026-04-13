@@ -145,10 +145,21 @@ function ensureAllTaskUnits(rows = []) {
 
 class DataService {
     async _ensureAuthToken() {
+        // Check if token exists in memory
         const token = apiClient.getAuthToken();
         if (token) return true;
-        const boot = await AuthService.bootstrapSession?.();
-        if (boot?.success && apiClient.getAuthToken()) return true;
+
+        // Try to bootstrap from storage once
+        try {
+            const boot = await AuthService.bootstrapSession?.();
+            if (boot?.success && apiClient.getAuthToken()) {
+                return true;
+            }
+        } catch (e) {
+            // Bootstrap failed, return false
+        }
+
+        // No token and bootstrap failed - user must login
         return false;
     }
 

@@ -65,11 +65,25 @@ class ConnectorService {
         if (!connectorId) throw new Error('Missing CONNECTOR_ID');
         if (!sql || !String(sql).trim()) throw new Error('Missing SQL query');
 
+        // Ensure token is available before querying
+        let token = apiClient.getAuthToken();
+        if (!token) {
+            // Attempt to bootstrap session from storage
+            await AuthService.bootstrapSession().catch(() => {
+                // ignore bootstrap errors, will check token below
+            });
+            token = apiClient.getAuthToken();
+        }
+
+        if (!token) {
+            throw new Error('Missing access token (login required)');
+        }
+
         const finalQuery = resolveQueryTemplateWithParams(sql, params);
 
         const runOnce = async () => {
-            const token = apiClient.getAuthToken();
-            if (!token) throw new Error('Missing access token (login required)');
+            const currentToken = apiClient.getAuthToken();
+            if (!currentToken) throw new Error('Missing access token (login required)');
 
             const res = await fetch(
                 `${coreBaseUrl()}/api/v1/connector/${connectorId}/query`,

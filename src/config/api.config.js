@@ -72,17 +72,15 @@ export const TASK_UNITS =
     TASK_UNIT_DEFS.length > 0
         ? TASK_UNIT_DEFS.map((d) => d.label)
         : (process.env.EXPO_PUBLIC_TASK_UNITS ||
-              'Trung Ương giao|Thành uỷ|UBND Thành phố|HĐND Thành phố')
-              .split('|')
-              .map((s) => s.trim())
-              .filter(Boolean);
+            'Trung Ương giao|Thành uỷ|UBND Thành phố|HĐND Thành phố')
+            .split('|')
+            .map((s) => s.trim())
+            .filter(Boolean);
 
 /** Đường dẫn auth Core (nối sau CORE_API_URL, có dấu / đầu). */
 export const CORE_AUTH_PATHS = {
     login: '/api/v1/authentication/login',
     refresh: '/api/v1/authentication/refresh',
-    /** Tài liệu SSE không mô tả đăng ký; chỉnh nếu backend của bạn khác. */
-    register: '/api/v1/authentication/register',
 };
 
 /** Mã agent tùy chọn gửi trong body (§3.1). Để undefined nếu dùng agent mặc định server. */
