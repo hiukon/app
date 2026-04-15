@@ -8,6 +8,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { formatRelativeTime } from '../../../utils/formatters';
 import { removeTriggerTokens } from '../../../utils/triggerParser';
+import Markdown from 'react-native-markdown-display';
 
 export default function ChatMessage({ message, onEdit }) {
     const isUser = message.isUser;
@@ -34,7 +35,6 @@ export default function ChatMessage({ message, onEdit }) {
             setDots('');
             return;
         }
-        // Chỉ hiển thị dots khi chưa có text
         if (message.text?.trim()) {
             setDots('');
             return;
@@ -73,43 +73,146 @@ export default function ChatMessage({ message, onEdit }) {
     }, [hasMeta, meta]);
 
     const visibleText = (() => {
-        // Streaming state
         if (message.status === 'streaming' && !isUser && !message.text?.trim()) {
             return `Đang suy nghĩ${dots}`;
         }
-        // Xóa trigger tokens khỏi text
         return removeTriggerTokens(message.text || '');
     })();
+
+    // HÀM XỬ LÝ TEXT: BOT chỉ hiển thị plain text, USER giữ nguyên
+    const renderFormattedText = (text) => {
+        if (!text) return null;
+        if (isUser) {
+            return <Text style={{ color: 'white', fontSize: 15, lineHeight: 22 }}>{text}</Text>;
+        }
+        // Bot: loại bỏ mọi ký hiệu markdown, chỉ hiển thị plain text
+        let cleaned = text
+            .replace(/\*\*(.*?)\*\*/g, '$1')
+            .replace(/\*(.*?)\*/g, '$1')
+            .replace(/__(.*?)__/g, '$1')
+            .replace(/`(.*?)`/g, '$1')
+            .replace(/~~(.*?)~~/g, '$1')
+            .replace(/^[-*•]\s+/gm, '• ')
+            .replace(/^\d+\.\s+/gm, '▪️ ')
+            .replace(/\n{3,}/g, '\n\n')
+            .replace(/[ \t]+/g, ' ').trim();
+        return cleaned.split('\n').map((line, idx) => (
+            <Text key={idx} style={{ marginBottom: 4, fontSize: 15, lineHeight: 22, color: '#1f2937' }}>{line}</Text>
+        ));
+    };
+
+    // Style cho Markdown (nếu dùng)
+    const markdownStyles = {
+        body: {
+            color: isUser ? 'white' : '#1f2937',
+            fontSize: 15,
+            lineHeight: 22,
+        },
+        paragraph: {
+            marginTop: 4,
+            marginBottom: 4,
+            lineHeight: 22,
+        },
+        heading1: {
+            fontSize: 20,
+            fontWeight: 'bold',
+            color: isUser ? 'white' : '#1f2937',
+            marginTop: 8,
+            marginBottom: 4,
+        },
+        heading2: {
+            fontSize: 18,
+            fontWeight: 'bold',
+            color: isUser ? 'white' : '#1f2937',
+            marginTop: 8,
+            marginBottom: 4,
+        },
+        heading3: {
+            fontSize: 16,
+            fontWeight: 'bold',
+            color: isUser ? 'white' : '#1f2937',
+            marginTop: 6,
+            marginBottom: 3,
+        },
+        strong: {
+            fontWeight: 'bold',
+            color: isUser ? 'white' : '#111827',
+        },
+        em: {
+            fontStyle: 'italic',
+        },
+        bullet_list: {
+            marginTop: 6,
+            marginBottom: 6,
+            paddingLeft: 0,
+        },
+        list_item: {
+            flexDirection: 'row',
+            alignItems: 'flex-start',
+            marginTop: 3,
+            marginBottom: 3,
+        },
+        bullet_list_icon: {
+            color: isUser ? '#a7f3d0' : '#3b82f6',
+            fontSize: 15,
+            marginRight: 8,
+            lineHeight: 22,
+        },
+        bullet_list_content: {
+            flex: 1,
+            color: isUser ? 'white' : '#1f2937',
+            fontSize: 15,
+            lineHeight: 22,
+        },
+        link: {
+            color: isUser ? '#a7f3d0' : '#2563eb',
+            textDecorationLine: 'underline',
+        },
+        blockquote: {
+            backgroundColor: isUser ? 'rgba(255,255,255,0.1)' : '#f3f4f6',
+            borderLeftColor: isUser ? '#a7f3d0' : '#3b82f6',
+            borderLeftWidth: 4,
+            paddingLeft: 10,
+            paddingVertical: 4,
+            marginTop: 6,
+            marginBottom: 6,
+        },
+        code_inline: {
+            backgroundColor: isUser ? 'rgba(255,255,255,0.2)' : '#e5e7eb',
+            borderRadius: 4,
+            paddingHorizontal: 6,
+            paddingVertical: 2,
+            fontFamily: 'monospace',
+            fontSize: 13,
+        },
+    };
 
     const bubble = (
         <View
             style={{
                 maxWidth: '85%',
-                backgroundColor: isUser ? '#1e32b6' : '#e0e7ff',
-                paddingHorizontal: 12,
+                backgroundColor: isUser ? '#2563eb' : '#ffffff',
+                paddingHorizontal: 14,
                 paddingVertical: 10,
-                borderRadius: 18,
-                borderBottomRightRadius: isUser ? 4 : 18,
-                borderBottomLeftRadius: isUser ? 18 : 4,
+                borderRadius: 20,
+                borderBottomRightRadius: isUser ? 4 : 20,
+                borderBottomLeftRadius: isUser ? 20 : 4,
                 shadowColor: '#000',
                 shadowOffset: { width: 0, height: 1 },
-                shadowOpacity: 0.1,
+                shadowOpacity: 0.08,
                 shadowRadius: 2,
-                elevation: 2,
+                elevation: 1,
+                borderWidth: isUser ? 0 : 1,
+                borderColor: isUser ? 'transparent' : '#e5e7eb',
             }}
         >
-            <Text
-                style={{
-                    color: isUser ? 'white' : '#1f2937',
-                    fontSize: 14,
-                    lineHeight: 20,
-                    fontWeight: '500',
-                }}
-            >
-                {visibleText}
-            </Text>
+            {/* Nội dung tin nhắn đã được format */}
+            {visibleText ? (
+                <View>
+                    {renderFormattedText(visibleText)}
+                </View>
+            ) : null}
 
-            {/* Chỉ hiển thị meta cho tin nhắn bot */}
             {hasMeta && !isUser ? (
                 <TouchableOpacity
                     onPress={() => setShowMeta((v) => !v)}
@@ -124,7 +227,7 @@ export default function ChatMessage({ message, onEdit }) {
             {hasMeta && showMeta && !isUser ? (
                 <View style={{ marginTop: 8 }}>
                     {meta?.thinkingText ? (
-                        <View style={{ padding: 8, borderRadius: 6, backgroundColor: 'rgba(255,255,255,0.6)' }}>
+                        <View style={{ padding: 8, borderRadius: 6, backgroundColor: '#f3f4f6' }}>
                             <Text style={{ fontSize: 12, color: '#374151' }}>{meta.thinkingText}</Text>
                         </View>
                     ) : null}
@@ -202,12 +305,6 @@ export default function ChatMessage({ message, onEdit }) {
                                             {a.description.length > 60 ? '...' : ''}
                                         </Text>
                                     ) : null}
-                                    {a.language ? (
-                                        <Text style={{ fontSize: 10, color: '#6b7280' }}>
-                                            Lang: {a.language}
-                                            {a.version ? ` v${a.version}` : ''}
-                                        </Text>
-                                    ) : null}
                                 </TouchableOpacity>
                             ))}
                         </View>
@@ -228,17 +325,17 @@ export default function ChatMessage({ message, onEdit }) {
 
             <Text
                 style={{
-                    fontSize: 11,
-                    color: isUser ? '#a7f3d0' : '#6b7280',
-                    marginTop: 4,
+                    fontSize: 10,
+                    color: isUser ? '#bfdbfe' : '#9ca3af',
+                    marginTop: 6,
+                    textAlign: 'right',
                 }}
             >
                 {formatRelativeTime(message.timestamp)}
             </Text>
 
-            {/* Chỉ hiển thị hướng dẫn sửa cho tin nhắn user */}
             {isUser ? (
-                <Text style={{ fontSize: 9, color: isUser ? '#a7f3d0' : '#9ca3af', marginTop: 2 }}>
+                <Text style={{ fontSize: 9, color: '#bfdbfe', marginTop: 2, textAlign: 'right' }}>
                     Nhấn giữ để sửa
                 </Text>
             ) : null}

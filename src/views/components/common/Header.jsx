@@ -16,9 +16,8 @@ export default function Header({ user }) {
 
     return (
         <View style={{
-            marginHorizontal: scale(isTablet ? 16 : 12),
-            marginTop: scale(24),
-            borderRadius: scale(14),
+            borderBottomLeftRadius: scale(14),
+            borderBottomRightRadius: scale(14),
             backgroundColor: '#1d4ed8',
             paddingHorizontal: scale(isTablet ? 18 : 14),
             paddingVertical: scale(12),
@@ -28,13 +27,14 @@ export default function Header({ user }) {
         }}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 <View style={{
-                    width: scale(isTablet ? 44 : 36),
-                    height: scale(isTablet ? 44 : 36),
+                    width: scale(isTablet ? 40 : 36),
+                    height: scale(isTablet ? 40 : 36),
                     borderRadius: scale(isTablet ? 22 : 18),
                     backgroundColor: '#eff6ff',
                     justifyContent: 'center',
                     alignItems: 'center',
-                    marginRight: scale(10),
+                    marginRight: scale(12),
+                    
                 }}>
                     <Text style={{ color: '#1d4ed8', fontSize: scale(16), fontWeight: 'bold' }}>
                         {getInitial(effectiveUser?.name)}

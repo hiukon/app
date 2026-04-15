@@ -2,6 +2,7 @@ import {
     USE_SQL_CONNECTOR,
     SQL_QUERIES,
     TASK_UNITS,
+    ASSIGN_TASK_UNITS,
     TASK_UNIT_DEFS,
     API_ENDPOINTS,
 } from '../config/api.config';
@@ -257,6 +258,102 @@ class DataService {
         } catch (e) {
             return { success: false, error: e.message, data: null };
         }
+    }
+
+    async getAssignTasks(filters = {}) {
+        if (!USE_SQL_CONNECTOR || !SQL_QUERIES.assign) {
+            return {
+                success: false,
+                error: 'Chưa cấu hình SQL assign (EXPO_PUBLIC_SQL_ASSIGN).',
+                data: null,
+            };
+        }
+        try {
+            const ok = await this._ensureAuthToken();
+            if (!ok) {
+                return { success: false, error: 'Missing access token (login required)', data: null };
+            }
+
+            const { records } = await ConnectorService.query(
+                SQL_QUERIES.assign,
+                undefined,
+                { MONTHKEY: filters.monthKey }
+            );
+            const normalized = this._normalizeAssignTasksData(records || []);
+            return {
+                success: true,
+                data: normalized,
+            };
+        } catch (e) {
+            return { success: false, error: e.message, data: null };
+        }
+    }
+
+    _normalizeAssignTasksData(records = []) {
+        // Group data theo KHOI
+        const grouped = {};
+        
+        records.forEach((row) => {
+            const khoi = normalizeKhoiLabel(row.KHOI || '');
+            const status = (row.TRANGTHAIVIETTAT || '').trim();
+            const count = Number(row.SoLuong) || 0;
+            
+            if (!grouped[khoi]) {
+                grouped[khoi] = {
+                    name: khoi,
+                    cthQuaHan: 0,
+                    cthSapQuaHan: 0,
+                    cthTrongHan: 0,
+                    htQuaHan: 0,
+                    htDangKy: 0,
+                    total: 0,
+                };
+            }
+            
+            // Map TRANGTHAIVIETTAT -> field
+            // Format từ DB: "HT đúng hạn", "HT quá hạn", "CHT trong hạn", "CHT quá hạn", "CHT sắp quá hạn"
+            if (status === 'HT đúng hạn' || status.includes('Đã hoàn thành đúng hạn')) {
+                grouped[khoi].htDangKy += count;
+            } else if (status === 'HT quá hạn' || status.includes('Đã hoàn thành quá hạn')) {
+                grouped[khoi].htQuaHan += count;
+            } else if (status === 'CHT trong hạn' || status.includes('Chưa hoàn thành trong hạn')) {
+                grouped[khoi].cthTrongHan += count;
+            } else if (status === 'CHT quá hạn' || (status.includes('Chưa hoàn thành quá hạn') && !status.includes('sắp'))) {
+                grouped[khoi].cthQuaHan += count;
+            } else if (status === 'CHT sắp quá hạn' || status.includes('Chưa hoàn thành sắp quá hạn')) {
+                grouped[khoi].cthSapQuaHan += count;
+            }
+            
+            grouped[khoi].total += count;
+        });
+        
+        // Map theo ASSIGN_TASK_UNITS để tránh duplicate keys
+        // ID sẽ là a_1, a_2, a_3, a_4 theo thứ tự ASSIGN_TASK_UNITS
+        return ASSIGN_TASK_UNITS.map((taskUnit, index) => {
+            const key = unitKey(taskUnit);
+            const found = Object.values(grouped).find(item => unitKey(item.name) === key);
+            
+            if (found) {
+                return {
+                    id: `a_${index + 1}`,
+                    name: normalizeKhoiLabel(taskUnit),
+                    ...found,
+                };
+            }
+            
+            // Nếu không tìm thấy, trả về zero data
+            return {
+                id: `a_${index + 1}`,
+                name: normalizeKhoiLabel(taskUnit),
+                cthQuaHan: 0,
+                cthSapQuaHan: 0,
+                cthTrongHan: 0,
+                htQuaHan: 0,
+                htDangKy: 0,
+                total: 0,
+                status: 'normal',
+            };
+        });
     }
 
     async getNews() {

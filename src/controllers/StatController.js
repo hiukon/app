@@ -50,6 +50,33 @@ class StatController {
         }
     }
 
+    async loadAssignTasks(filters = {}) {
+        try {
+            const assignRes = await DataService.getAssignTasks(filters);
+
+            if (assignRes.success) {
+                const normalizedTasks = assignRes.data.map((item) => ({
+                    ...item,
+                    title: item.name,
+                    chtQuaHan: item.cthQuaHan,
+                    chtSapQuaHan: item.cthSapQuaHan,
+                    chtTrongHan: item.cthTrongHan,
+                    color: item.status === 'danger' ? '#ef4444' : item.status === 'warning' ? '#f59e0b' : '#2563eb',
+                }));
+
+                return {
+                    success: true,
+                    data: normalizedTasks
+                };
+            }
+            const err = assignRes.error || 'Không thể tải dữ liệu (assign tasks)';
+            console.error('loadAssignTasks failed', { assignRes });
+            return { success: false, error: err, assignRes };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    }
+
     getTotalStats(stats) {
         return stats.reduce((acc, curr) => ({
             cthQuaHan: acc.cthQuaHan + curr.cthQuaHan,

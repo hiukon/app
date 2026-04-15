@@ -8,6 +8,8 @@ import {
     FlatList,
     ActivityIndicator,
     SafeAreaView,
+    ImageBackground,
+    Image,
 } from 'react-native';
 import { PanGestureHandler, State } from 'react-native-gesture-handler';
 import Animated, { useSharedValue, useAnimatedStyle, withSpring } from 'react-native-reanimated';
@@ -20,6 +22,9 @@ import apiClient from '../../../services/api/apiClient';
 import AgentApiService from '../../../services/agent/AgentApiService';
 import ModelPickerModal from './ModelPickerModal';
 import { removeTriggerTokens } from '../../../utils/triggerParser';
+import botBubbleBg from '../../../assets/images/TUHN3.jpg';
+import { LinearGradient } from 'expo-linear-gradient';
+import chatIcon from '../../../assets/images/chatbot.png';
 
 export default function DraggableChatBubble() {
     const translateX = useSharedValue(0);
@@ -28,8 +33,8 @@ export default function DraggableChatBubble() {
     const offsetY = useSharedValue(0);
     const [modalVisible, setModalVisible] = useState(false);
     const [inputText, setInputText] = useState('');
-    const [selectedModel, setSelectedModel] = useState('intelligent'); // ✅ Thêm state cho model
-    const [showModelPicker, setShowModelPicker] = useState(false); // ✅ Thêm state cho model picker
+    const [selectedModel, setSelectedModel] = useState('intelligent'); 
+    const [showModelPicker, setShowModelPicker] = useState(false);
 
     const formatVietnamTime = (dateString) => {
         if (!dateString) return '';
@@ -139,7 +144,7 @@ export default function DraggableChatBubble() {
         setInputText('');
         const pending = attachments;
         setAttachments([]);
-        await sendMessage(currentMessage, { attachments: pending, agentModel: selectedModel }); // ✅ Truyền model
+        await sendMessage(currentMessage, { attachments: pending, agentModel: selectedModel }); 
     };
 
     const pickFile = async () => {
@@ -181,50 +186,101 @@ export default function DraggableChatBubble() {
         return Number.isNaN(date.getTime()) ? '' : date.toLocaleTimeString();
     };
 
-    const renderMessage = ({ item }) => {
-        const visibleText = item.status === 'streaming' && !item.isUser && !`${item.text || ''}`.trim()
-            ? `Đang suy nghĩ${thinkingDots}`
-            : removeTriggerTokens(item.text || '');
-        return (
-            <TouchableOpacity
-                activeOpacity={item.isUser ? 0.9 : 1}
-                onLongPress={() => {
-                    if (!item.isUser) return;
-                    setEditingMessageId(item.id);
-                    setInputText(item.text || '');
-                }}
-                style={{
-                    flexDirection: 'row',
-                    justifyContent: item.isUser ? 'flex-end' : 'flex-start',
-                    marginBottom: 12,
-                }}>
-                <View style={{
-                    maxWidth: '80%',
-                    backgroundColor: item.isUser ? '#2563eb' : '#e5e7eb',
-                    padding: 12,
-                    borderRadius: 16,
-                    borderBottomRightRadius: item.isUser ? 4 : 16,
-                    borderBottomLeftRadius: item.isUser ? 16 : 4,
-                }}>
-                    <Text style={{ color: item.isUser ? 'white' : '#1f2937', fontSize: 14 }}>
-                        {visibleText}
-                    </Text>
-                    <Text style={{
-                        fontSize: 10,
-                        color: item.isUser ? '#bfdbfe' : '#6b7280',
-                        marginTop: 4,
-                    }}>
-                        {formatTimestamp(item.timestamp)}
-                    </Text>
-                    {item.isUser ? (
-                        <Text style={{ fontSize: 10, color: '#bfdbfe', marginTop: 4 }}>
-                            Nhấn giữ để sửa
-                        </Text>
-                    ) : null}
-                </View>
-            </TouchableOpacity>
-        );
+    const cleanMarkdownText = (text) => {
+        if (!text) return '';
+        let cleaned = text
+            .replace(/\*\*(.*?)\*\*/g, '$1')
+            .replace(/\*(.*?)\*/g, '$1')
+            .replace(/__(.*?)__/g, '$1')
+            .replace(/`(.*?)`/g, '$1')
+            .replace(/~~(.*?)~~/g, '$1')
+            .replace(/^[-*•]\s+/gm, '• ')
+            .replace(/^\d+\.\s+/gm, '▪️ ')
+            .replace(/\n{3,}/g, '\n\n')
+            .replace(/[ \t]+/g, ' ').trim();
+        return cleaned;
     };
+
+    const renderMessage = ({ item }) => {
+    const isUser = item.isUser;
+    let visibleText = item.status === 'streaming' && !isUser && !`${item.text || ''}`.trim()
+        ? `Đang suy nghĩ${thinkingDots}`
+        : removeTriggerTokens(item.text || '');
+    // Loại bỏ markdown cho bot messages
+    if (!isUser) {
+        visibleText = cleanMarkdownText(visibleText);
+    }
+
+    return (
+        <TouchableOpacity
+    activeOpacity={isUser ? 0.9 : 1}
+    onLongPress={() => {
+        if (!isUser) return;
+        setEditingMessageId(item.id);
+        setInputText(item.text || '');
+    }}
+    style={{
+        flexDirection: 'row',
+        justifyContent: isUser ? 'flex-end' : 'flex-start',
+        marginBottom: 12,
+        paddingHorizontal: 10,
+    }}>
+    
+    <View style={{ 
+        alignItems: isUser ? 'flex-end' : 'flex-start',
+        maxWidth: '85%',
+    }}>
+        {/* Lớp bọc Gradient đóng vai trò làm VIỀN */}
+        <LinearGradient
+            colors={isUser ? ['#e7e8e9', '#f9fbff'] : ['#732cc9', '#7840f2', '#5c50da', '#5233f0']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={{
+                padding: 1.5,
+                borderRadius: 18,
+                borderBottomLeftRadius: isUser ? 18 : 4,
+                borderBottomRightRadius: isUser ? 4 : 18,
+            }}
+        >
+            <View style={{
+                backgroundColor: isUser ? '#2581eb' : 'white',
+                padding: 12,
+                borderRadius: 17,
+                borderBottomLeftRadius: isUser ? 17 : 4,
+                borderBottomRightRadius: isUser ? 4 : 17,
+            }}>
+                <Text style={{ 
+                    color: isUser ? 'white' : '#1f2937', 
+                    fontSize: 14 
+                }}>
+                    {visibleText}
+                </Text>
+                <Text style={{ 
+                    fontSize: 10, 
+                    color: isUser ? '#dbeafe' : '#6b7280',
+                    marginTop: 4,
+                    textAlign: 'right',
+                }}>
+                    {formatTimestamp(item.timestamp)}
+                </Text>
+            </View>
+        </LinearGradient>
+        
+        {/* Text "Nhấn giữ để sửa" ở bên dưới, căn phải cho user */}
+        {isUser && (
+            <Text style={{ 
+                fontSize: 10, 
+                color: '#ffffff', 
+                marginTop: 4,
+                marginRight: 4,
+            }}>
+                 Nhấn giữ để sửa
+            </Text>
+        )}
+    </View>
+</TouchableOpacity>
+    );
+};
 
     return (
         <>
@@ -246,30 +302,43 @@ export default function DraggableChatBubble() {
                             elevation: 8,
                         }}
                     >
-                        <MaterialIcons name="chat" size={scale(28)} color="white" />
+                        <Image 
+                                source={chatIcon} 
+                                style={{ width: 28, height: 28, tintColor: 'white' }}
+                            />
                     </TouchableOpacity>
                 </Animated.View>
             </PanGestureHandler>
 
             <Modal visible={modalVisible} animationType="slide" transparent={false}>
-                <SafeAreaView style={{ flex: 1, backgroundColor: '#f3f4f6' }}>
+                <ImageBackground source={botBubbleBg} style={{ flex: 1 }} resizeMode="cover">
+                <SafeAreaView style={{ flex: 1, backgroundColor: 'transparent' }}>
                     {/* Chat Header */}
-                    <View style={{
-                        backgroundColor: '#2563eb',
-                        padding: 16,
-                        flexDirection: 'row',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                    }}>
+                    <LinearGradient
+                        colors={['#732cc9', '#7840f2', '#5c50da', '#5233f0']} 
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 1 }}
+                        style={{
+                            padding: 16,
+                            flexDirection: 'row',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            borderTopLeftRadius: 16,
+                            borderTopRightRadius: 16,
+                        }}
+                    >
                         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                            <MaterialIcons name="chat" size={24} color="white" />
+                            <Image 
+                                source={chatIcon} 
+                                style={{ width: 24, height: 24, tintColor: 'white' }}
+                            />
                             <Text style={{ color: 'white', fontSize: 18, fontWeight: 'bold', marginLeft: 8 }}>
-                                Trợ lý AI HaNoiBrain
+                                AI HaNoiBrain
                             </Text>
-                            {/* ✅ Hiển thị model đang chọn */}
+                            {/*  Hiển thị model đang chọn */}
                             <View style={{
                                 marginLeft: 8,
-                                backgroundColor: 'rgba(255,255,255,0.2)',
+                                backgroundColor: 'rgba(255,255,255,0.3)',
                                 paddingHorizontal: 6,
                                 paddingVertical: 2,
                                 borderRadius: 12,
@@ -290,7 +359,7 @@ export default function DraggableChatBubble() {
                                 <MaterialIcons name="close" size={24} color="white" />
                             </TouchableOpacity>
                         </View>
-                    </View>
+                    </LinearGradient>
 
                     {/* Messages */}
                     <FlatList
@@ -341,9 +410,9 @@ export default function DraggableChatBubble() {
                     <View style={{
                         flexDirection: 'row',
                         padding: 12,
-                        backgroundColor: 'white',
+                        backgroundColor: 'rgba(255, 255, 255, 0.3)',
                         borderTopWidth: 1,
-                        borderTopColor: '#e5e7eb',
+                        borderTopColor: '#576c96',
                         alignItems: 'center',
                         gap: 8,
                     }}>
@@ -469,6 +538,7 @@ export default function DraggableChatBubble() {
                         </View>
                     ) : null}
                 </SafeAreaView>
+                </ImageBackground>
             </Modal>
 
             {/* Modal lịch sử */}
@@ -530,8 +600,6 @@ export default function DraggableChatBubble() {
                     </View>
                 </View>
             </Modal>
-
-            {/* ✅ Model Picker Modal */}
             <ModelPickerModal
                 visible={showModelPicker}
                 selectedModel={selectedModel}

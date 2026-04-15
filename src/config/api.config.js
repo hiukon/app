@@ -40,6 +40,7 @@ export const CONNECTOR_ID = process.env.EXPO_PUBLIC_CONNECTOR_ID || '';
 export const SQL_QUERIES = {
     statistics: process.env.EXPO_PUBLIC_SQL_STATISTICS || '',
     overview: process.env.EXPO_PUBLIC_SQL_OVERVIEW || '',
+    assign: process.env.EXPO_PUBLIC_SQL_ASSIGN || '',
     news: process.env.EXPO_PUBLIC_SQL_NEWS || '',
     user: process.env.EXPO_PUBLIC_SQL_USER || '',
 };
@@ -76,6 +77,13 @@ export const TASK_UNITS =
             .split('|')
             .map((s) => s.trim())
             .filter(Boolean);
+
+export const ASSIGN_TASK_UNITS =
+    (process.env.EXPO_PUBLIC_ASSIGN_TASK_UNITS ||
+        'Thành ủy Hà Nội|UBND Thành phố|HĐND Thành phố|Ủy ban MTTQ Việt Nam thành phố Hà Nội')
+        .split('|')
+        .map((s) => s.trim())
+        .filter(Boolean);
 
 /** Đường dẫn auth Core (nối sau CORE_API_URL, có dấu / đầu). */
 export const CORE_AUTH_PATHS = {

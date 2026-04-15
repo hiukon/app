@@ -92,8 +92,10 @@ export function useChat() {
                 setMessages(chatController.getMessages());
                 setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
             };
+            // skipUserMessage: true vì tin nhắn user đã được sửa trong editAndPruneFromMessage
+            // Không cần tạo tin nhắn user mới
             const result = await chatController.sendUserMessage(newText.trim(), bump, {
-                skipUserMessage: false,
+                skipUserMessage: true,
             });
             setMessages(chatController.getMessages());
             setPendingInterrupt(chatController.getPendingInterrupt?.() || null);

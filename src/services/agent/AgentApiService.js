@@ -95,8 +95,6 @@ class AgentApiService {
     async fetchCitations(token, runId) {
         const url = `${this.baseUrl()}/api/v1/run/${runId}/citations`;
 
-        console.log('🔗 fetchCitations URL:', url);
-
         try {
             const response = await fetch(url, {
                 method: 'GET',
@@ -114,7 +112,6 @@ class AgentApiService {
 
             return await response.json();
         } catch (error) {
-            console.error('🔗 fetchCitations error:', error);
             throw error;
         }
     }
@@ -164,7 +161,7 @@ class AgentApiService {
         try {
             console.log('🔗 Trying endpoint 1:', url1);
             const response = await fetch(url1, {
-                method: 'GET',
+                method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${token}`,
                     'Content-Type': 'application/json',

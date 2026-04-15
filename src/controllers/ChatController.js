@@ -93,7 +93,7 @@ class ChatController {
     ensureWelcomeMessage() {
         if (this.chatModel.getMessages().length === 0) {
             this.chatModel.addMessage({
-                text: 'Xin chào! Tôi là trợ lý ảo HaNoiBrain. Tôi có thể giúp gì cho bạn?',
+                text: 'Xin chào! Tôi có thể giúp gì cho bạn?',
                 isUser: false,
             });
         }
@@ -261,7 +261,7 @@ class ChatController {
             const messages = this.chatModel.getMessages();
             if (messages.length === 0) return;
             await AsyncStorage.setItem(`conv_${this.conversationId}`, JSON.stringify(messages));
-            console.log('💾 Cached:', this.conversationId, messages.length);
+            
         } catch (error) {
             console.error('Cache error:', error);
         }
@@ -274,7 +274,7 @@ class ChatController {
                 const messages = JSON.parse(cached);
                 this.chatModel.clearMessages();
                 messages.forEach(msg => this.chatModel.addMessage(msg));
-                console.log('📦 Loaded from cache:', messages.length);
+                
                 return true;
             }
         } catch (error) {
@@ -969,7 +969,8 @@ class ChatController {
         this.chatModel.messages = rows.slice(0, idx + 1);
         this.runId = null;
         this.pendingInterrupt = null;
-        this.conversationId = null;
+        // 🔧 FIX: Không set conversationId = null, giữ conversation cũ để update thay vì tạo mới
+        // this.conversationId = null;  // REMOVED: Điều này làm tạo conversation mới thay vì update cũ
         this._currentAssistantId = null;
         return { success: true };
     }
