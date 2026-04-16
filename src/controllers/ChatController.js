@@ -261,7 +261,6 @@ class ChatController {
             const messages = this.chatModel.getMessages();
             if (messages.length === 0) return;
             await AsyncStorage.setItem(`conv_${this.conversationId}`, JSON.stringify(messages));
-            
         } catch (error) {
             console.error('Cache error:', error);
         }
@@ -274,7 +273,6 @@ class ChatController {
                 const messages = JSON.parse(cached);
                 this.chatModel.clearMessages();
                 messages.forEach(msg => this.chatModel.addMessage(msg));
-                
                 return true;
             }
         } catch (error) {
@@ -387,10 +385,30 @@ class ChatController {
                 }
                 const piece = readEventText(ev);
                 if (!piece) break;
+
+                // ✅ LỌC CHUNK LOG
+                const lowerPiece = piece.toLowerCase();
+                const isLogChunk =
+                    lowerPiece.includes('người dùng muốn biết') ||
+                    lowerPiece.includes('tìm kiếm thông tin') ||
+                    lowerPiece.includes('tìm kiếm kỹ năng') ||
+                    lowerPiece.includes('observe the result') ||
+                    lowerPiece.includes('dựa trên kết quả') ||
+                    lowerPiece.includes('theo hướng dẫn') ||
+                    lowerPiece.includes('tôi sẽ tổng hợp') ||
+                    lowerPiece.includes('tôi cần tìm kiếm') ||
+                    /^\d{1,2}:\d{2}:\d{2}\s*(am|pm)/i.test(lowerPiece);
+
+                if (isLogChunk) {
+                    break;
+                }
+
                 this._ensureStreamingPlaceholder();
                 const cur = this.chatModel.getMessages().find((m) => m.id === this._currentAssistantId);
+                const currentText = `${cur?.text || ''}${piece}`;
+
                 this.chatModel.updateMessage(this._currentAssistantId, {
-                    text: `${cur?.text || ''}${piece}`,
+                    text: currentText,
                     status: 'streaming',
                 });
                 onMessagesUpdate?.();
@@ -441,18 +459,6 @@ class ChatController {
             }
 
             case 'THINKING_TEXT_MESSAGE_CONTENT': {
-                const piece = readEventText(ev);
-                if (!piece) break;
-                const rows = this.chatModel.getMessages();
-                const last = rows.slice().reverse().find((m) => !m.isUser);
-                const id = last && last.status === 'streaming'
-                    ? last.id
-                    : this.chatModel.addMessage({ text: '', isUser: false, status: 'streaming' }).id;
-                const current = this.chatModel.getMessages().find((m) => m.id === id);
-                const meta = current?.meta || {};
-                const thinkingText = `${meta.thinkingText || ''}${piece}`;
-                this.chatModel.updateMessage(id, { meta: { ...meta, thinkingText } });
-                onMessagesUpdate?.();
                 break;
             }
 
@@ -597,7 +603,20 @@ class ChatController {
                     if (this._currentAssistantId) {
                         const cur = this.chatModel.getMessages().find((m) => m.id === this._currentAssistantId);
                         const fallbackText = readEventText(ev);
-                        const safeText = `${cur?.text || ''}`.trim() || `${fallbackText || ''}`.trim();
+                        let safeText = `${cur?.text || ''}`.trim() || `${fallbackText || ''}`.trim();
+
+                        // ✅ LỌC: Chỉ lấy đoạn dài nhất (câu trả lời)
+                        const paragraphs = safeText.split(/\n\s*\n/);
+                        let longestPara = '';
+                        for (const para of paragraphs) {
+                            if (para.length > longestPara.length &&
+                                !para.toLowerCase().includes('tìm kiếm') &&
+                                !para.toLowerCase().includes('người dùng')) {
+                                longestPara = para;
+                            }
+                        }
+                        safeText = longestPara || safeText;
+
                         if (safeText) {
                             this.chatModel.updateMessage(this._currentAssistantId, {
                                 status: 'sent',
@@ -608,6 +627,7 @@ class ChatController {
                         }
                         this._currentAssistantId = null;
                     }
+
                     const hasAssistantText = this.chatModel.getMessages().some((m) => !m.isUser && `${m.text || ''}`.trim().length > 0);
                     if (!hasAssistantText && ev.outcome === 'success') {
                         this.chatModel.addMessage({
@@ -969,8 +989,6 @@ class ChatController {
         this.chatModel.messages = rows.slice(0, idx + 1);
         this.runId = null;
         this.pendingInterrupt = null;
-        // 🔧 FIX: Không set conversationId = null, giữ conversation cũ để update thay vì tạo mới
-        // this.conversationId = null;  // REMOVED: Điều này làm tạo conversation mới thay vì update cũ
         this._currentAssistantId = null;
         return { success: true };
     }

@@ -9,7 +9,21 @@
         },
         "preview": {
             "android": {
-                "buildType": "apk"
+                "buildType": "apk",
+                "gradleCommand": ":app:assembleRelease"
+            },
+            "env": {
+                "EXPO_PUBLIC_AGENT_API_URL": "https://agent.next.seinetime.ai",
+                "EXPO_PUBLIC_CORE_API_URL": "https://api.next.seinetime.ai",
+                "EXPO_PUBLIC_USE_AGENT_CHAT": "true",
+                "EXPO_PUBLIC_USE_SQL_CONNECTOR": "true",
+                "EXPO_PUBLIC_CONNECTOR_ID": "01kmfqey31fk3gvbd0cadfsz62",
+                "EXPO_PUBLIC_TASK_UNIT_DEFS": "Thành uỷ|UBND Thành phố|HĐND Thành phố|Ủy ban MTTQ Việt Nam Thành phố",
+                "EXPO_PUBLIC_TASK_UNITS": "Trung Ương giao Thành uỷ|UBND Thành phố|HĐND Thành phố|Ủy ban MTTQ Việt Nam Thành phố",
+                "EXPO_PUBLIC_ASSIGN_TASK_UNITS": "Thành ủy Hà Nội|UBND Thành phố|HĐND Thành phố|Ủy ban MTTQ Việt Nam thành phố Hà Nội",
+                "EXPO_PUBLIC_SQL_STATISTICS": "SELECT N'Trung Ương giao Thành uỷ' as KHOI, SUM(TONG_SO_NHIEM_VU) AS tong_so_nhiem_vu, SUM(DA_HOAN_THANH_DUNG_HAN) AS da_hoan_thanh_dung_han, SUM(DA_HOAN_THANH_QUA_HAN) AS da_hoan_thanh_qua_han, SUM(ON_DINH_DUNG_HAN) + SUM(THUONG_XUYEN) + SUM(DANG_TIEN_HANH_DUNG_HAN) AS chua_hoan_thanh_trong_han, SUM(DANG_TIEN_HANH_QUA_HAN) AS chua_hoan_thanh_qua_han, SUM(SAP_DEN_HAN) AS chua_hoan_thanh_sap_qua_han FROM UBND_THEODOINV_BAO_CAO_TONG_QUAN WHERE MONTHKEY = {{MONTHKEY}} UNION ALL SELECT LOAICAPCHA as KHOI, count(*) as tong_so_nhiem_vu, SUM(CASE WHEN TRANGTHAI = N'Đã hoàn thành đúng hạn' THEN 1 ELSE 0 END) AS da_hoan_thanh_dung_han, SUM(CASE WHEN TRANGTHAI = N'Đã hoàn thành quá hạn' THEN 1 ELSE 0 END) AS da_hoan_thanh_qua_han, SUM(CASE WHEN TRANGTHAI = N'Chưa hoàn thành trong hạn' THEN 1 ELSE 0 END) AS chua_hoan_thanh_trong_han, SUM(CASE WHEN TRANGTHAI = N'Chưa hoàn thành quá hạn' THEN 1 ELSE 0 END) AS chua_hoan_thanh_qua_han, SUM(CASE WHEN TRANGTHAI = N'Chưa hoàn thành sắp quá hạn' THEN 1 ELSE 0 END) AS chua_hoan_thanh_sap_qua_han FROM UBND_THEODOINV_TONGHOP_CHITIET_KHOI WHERE NHOMGIAONHAN = N'Được giao' AND MONTHKEY >= {{YEAR_START_MONTHKEY}} AND MONTHKEY <= {{MONTHKEY}} AND LOAICAPCHA IN (N'UBND Thành phố', N'HĐND Thành phố', N'Ủy ban MTTQ Việt Nam thành phố Hà Nội') AND TRANGTHAIVIETTAT <> N'Chưa xác định' GROUP BY LOAICAPCHA",
+                "EXPO_PUBLIC_SQL_ASSIGN": "SELECT LOAICAPCHA AS KHOI, TRANGTHAIVIETTAT, COUNT(*) AS SoLuong FROM UBND_THEODOINV_TONGHOP_CHITIET_KHOI WHERE NHOMGIAONHAN = N'Đã giao' AND MONTHKEY = {{MONTHKEY}} AND LOAICAPCHA IN (N'Thành ủy Hà Nội', N'UBND Thành phố', N'HĐND Thành phố', N'Ủy ban MTTQ Việt Nam thành phố Hà Nội') GROUP BY LOAICAPCHA, TRANGTHAIVIETTAT ORDER BY LOAICAPCHA, TRANGTHAIVIETTAT",
+                "EXPO_PUBLIC_SQL_OVERVIEW": "SELECT SUM(TONG_SO_NHIEM_VU) AS TONG, SUM(SAP_DEN_HAN) AS CHT_SAP_QUA_HAN, SUM(DA_HOAN_THANH_QUA_HAN) AS HT_QUA_HAN, SUM(DANG_TIEN_HANH_QUA_HAN) AS CHT_QUA_HAN, SUM(ON_DINH_DUNG_HAN + THUONG_XUYEN + DANG_TIEN_HANH_DUNG_HAN) AS CHT_TRONG_HAN, SUM(DA_HOAN_THANH_DUNG_HAN) AS HT_DUNG_HAN FROM UBND_THEODOINV_BAO_CAO_TONG_QUAN WHERE MONTHKEY = {{MONTHKEY}}"
             }
         },
         "production": {}

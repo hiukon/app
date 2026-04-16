@@ -1,30 +1,50 @@
 {
-    "expo": {
-        "name": "HaNoiBrain",
-        "slug": "hanobrain",
-        "version": "1.0.0",
-        "orientation": "portrait",
-        "userInterfaceStyle": "light",
-        "splash": {
-            "resizeMode": "contain",
-            "backgroundColor": "#ffffff"
-        },
-        "assetBundlePatterns": [
-            "**/*"
-        ],
-        "ios": {
-            "supportsTablet": true,
-            "bundleIdentifier": "com.hanobrain.app"
-        },
-        "android": {
-            "adaptiveIcon": {
-                "backgroundColor": "#ffffff"
-            },
-            "package": "com.hanobrain.app"
-        },
-        "web": {},
-        "extra": {
-            "API_URL": "https://api.hanobrain.vn"
+  "expo": {
+    "name": "HaNoiBrain",
+    "slug": "hanobrain",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.hanobrain.app"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#ffffff"
+      },
+      "package": "com.hanobrain.app",
+      "permissions": [
+        "android.permission.DETECT_SCREEN_CAPTURE"
+      ]
+    },
+    "web": {},
+    "extra": {
+      "API_URL": "https://api.hanobrain.vn",
+      "eas": {
+        "projectId": "c4cf9090-66f0-48af-bfe0-5fd8a17978a2"
+      }
+    },
+    "plugins": [
+      "expo-secure-store",
+      "expo-font",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "compileSdkVersion": 34,
+            "targetSdkVersion": 34,
+            "buildToolsVersion": "34.0.0"
+          }
         }
-    }
+      ]
+    ]
+  }
 }

@@ -36,6 +36,9 @@ export function removeTriggerTokens(text) {
         return num + '. ';
     });
 
+    // 4.6. Chuyển các mention @[]() thành chỉ tên hiển thị
+    cleaned = cleaned.replace(/@\[(.*?)\]\([^\)]+\)/g, '$1');
+
     // 5. Loại bỏ khoảng trắng thừa ở hai đầu
     return cleaned.trim();
 }
