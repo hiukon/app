@@ -1,123 +1,25 @@
+// components/MessageItem.jsx
 import React, { memo } from 'react';
 import { View, Text, TouchableOpacity } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import Markdown from 'react-native-markdown-display';
+import { MaterialIcons } from '@expo/vector-icons';
+import { ArtifactItem } from './ArtifactItem';
+import { convertTokensToDisplayWithMap, cleanBotText, sanitizeTechnicalText, formatMarkdownText } from '../utils/textUtils';
 import { removeTriggerTokens } from '../../../utils/triggerParser';
-import { formatRelativeTime } from '../../../utils/formatters';
 
-// ==================== HÀM TIỆN ÍCH ====================
-
-// Hàm xử lý user message - thay thế token bằng tên hiển thị
-const processUserMessage = (text, domainIdToCodeMap) => {
-    if (!text) return '';
-
-    let processed = text;
-
-    // ✅ CÁCH 1: Dùng regex trực tiếp (giống convertTokensToDisplayWithMap)
-    processed = processed.replace(/<@:domain=([^>]+)>/g, (match, id) => {
-        const codeName = domainIdToCodeMap?.[id];
-        return codeName ? `@${codeName}` : match;
-    });
-
-    // Xử lý skill token (giữ nguyên, đang hoạt động tốt)
-    processed = processed.replace(/<\/([^>]+)>/g, (match, code) => {
-        const cleanCode = code.replace(/^:/, '');
-        return `/${cleanCode}`;
-    });
-
-    return processed;
-};
-
-const convertTokensToDisplay = (text, domainIdToCodeMap) => {
-    if (!text) return '';
-
-    let converted = text;
-
-    // Xử lý skill token
-    converted = converted.replace(/<\/([^>]+)>/g, (match, code) => {
-        const cleanCode = code.replace(/^:/, '');
-        return `/${cleanCode}`;
-    });
-
-    // Xử lý domain token
-    converted = converted.replace(/<@:domain=([^>]+)>/g, (match, id) => {
-        const codeName = domainIdToCodeMap?.[id];
-        return codeName ? `@${codeName}` : match;
-    });
-
-    return converted;
-};
-
-const cleanMarkdownText = (text) => {
-    if (!text) return '';
-    return text
-        .replace(/\*\*(.*?)\*\*/g, '$1')
-        .replace(/\*(.*?)\*/g, '$1')
-        .replace(/__(.*?)__/g, '$1')
-        .replace(/`(.*?)`/g, '$1')
-        .replace(/~~(.*?)~~/g, '$1')
-        .replace(/^[-*•]\s+/gm, '• ')
-        .replace(/^\d+\.\s+/gm, '▪️ ')
-        .replace(/\n{3,}/g, '\n\n')
-        .trim();
-};
-
-const sanitizeTechnicalText = (text) => {
-    if (!text) return '';
-    const patterns = [/syntaxerror/i, /traceback/i, /exception/i, /http\s*\d{3}/i];
-    return patterns.some(p => p.test(text)) ? 'Đã có lỗi xảy ra. Vui lòng thử lại.' : text;
-};
-
-const cleanBotText = (text) => {
-    if (!text) return null;
-
-    const lines = text.split('\n');
-    const filteredLines = lines.filter(line => {
-        const lowerLine = line.toLowerCase();
-        if (line.trim().length < 10) return false;
-        if (lowerLine.includes('người dùng muốn biết')) return false;
-        if (lowerLine.includes('tìm kiếm thông tin')) return false;
-        if (lowerLine.includes('tìm kiếm kỹ năng')) return false;
-        if (lowerLine.includes('observe the result')) return false;
-        if (lowerLine.includes('dựa trên kết quả')) return false;
-        if (lowerLine.includes('theo hướng dẫn')) return false;
-        if (lowerLine.includes('tôi sẽ tổng hợp')) return false;
-        if (lowerLine.includes('tôi cần tìm kiếm')) return false;
-        if (lowerLine.includes('tôi đã tìm kiếm')) return false;
-        if (lowerLine.includes('sau khi tìm kiếm')) return false;
-        if (lowerLine.includes('cortex')) return false;
-        if (lowerLine.match(/\d{1,2}:\d{2}:\d{2}\s*(am|pm)/)) return false;
-        return true;
-    });
-
-    let cleaned = filteredLines.join('\n').trim();
-
-    if (cleaned) {
-        const paragraphs = cleaned.split(/\n\s*\n/);
-        cleaned = paragraphs[paragraphs.length - 1];
-    }
-
-    cleaned = cleaned?.replace(/\d{1,2}:\d{2}:\d{2}\s*(AM|PM)/gi, '');
-
-    if (!cleaned || cleaned.length < 15) {
-        return null;
-    }
-
-    return cleaned;
-};
-
-// ==================== COMPONENT CHÍNH ====================
-
-const MessageItem = memo(({
+export const MessageItem = memo(({
     item,
     onLongPressUserMessage,
     formatTimestamp,
     thinkingDots,
     domainIdToCodeMap,
-    onSpeak,           // ← THÊM
-    isSpeaking,        // ← THÊM
-    onStopSpeaking,    // ← THÊM
+    onSpeak,
+    isSpeaking,
+    onStopSpeaking,
 }) => {
     const isUser = item.isUser;
+    const isStreaming = !isUser && item.status === 'streaming';
 
     let displayText = '';
     if (isUser) {
@@ -139,6 +41,8 @@ const MessageItem = memo(({
         }
         cleaned = removeTriggerTokens(cleaned);
         displayText = convertTokensToDisplayWithMap(cleaned, domainIdToCodeMap);
+        displayText = formatMarkdownText(displayText);
+
         if (!displayText.trim()) return null;
     }
 
@@ -166,7 +70,8 @@ const MessageItem = memo(({
                 justifyContent: isUser ? 'flex-end' : 'flex-start',
                 marginBottom: 12,
                 paddingHorizontal: 10,
-            }}>
+            }}
+        >
             <View style={{
                 alignItems: isUser ? 'flex-end' : 'flex-start',
                 maxWidth: '85%',
@@ -197,47 +102,64 @@ const MessageItem = memo(({
                             <View>
                                 <Markdown
                                     style={{
-                                        body: { color: '#1f2937', fontSize: 14, lineHeight: 20 },
-                                        strong: { fontWeight: 'bold', color: '#1f2937' },
-                                        em: { fontStyle: 'italic' },
-                                        bullet_list: { marginBottom: 4 },
-                                        bullet_list_item: { flexDirection: 'row', marginBottom: 2 },
-                                        ordered_list: { marginBottom: 4 },
-                                        ordered_list_item: { flexDirection: 'row', marginBottom: 2 },
-                                        paragraph: { marginBottom: 4 },
-                                        heading1: { fontSize: 20, fontWeight: 'bold', marginVertical: 6 },
-                                        heading2: { fontSize: 18, fontWeight: 'bold', marginVertical: 5 },
-                                        heading3: { fontSize: 16, fontWeight: 'bold', marginVertical: 4 },
-                                        link: { color: '#2563eb' },
+                                        body: { color: '#1f2937', fontSize: 14, lineHeight: 22 },
+                                        paragraph: { marginBottom: 10, marginTop: 4, marginLeft: 0, paddingLeft: 0, paddingRight: 8, lineHeight: 22 },
+                                        strong: { fontWeight: '700', color: '#111827' },
+                                        bullet_list: { marginBottom: 12, marginTop: 6, marginLeft: 0, paddingLeft: 0 },
+                                        bullet_list_item: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 6, marginLeft: 0, paddingLeft: 0 },
+                                        bullet_list_icon: { marginRight: 8, marginTop: 2, fontSize: 16, color: '#2563eb', width: 16, textAlign: 'center' },
+                                        bullet_list_content: { flex: 1, marginLeft: 0, paddingLeft: 0, paddingRight: 8 },
+                                        ordered_list: { marginBottom: 12, marginTop: 6, marginLeft: 0, paddingLeft: 0 },
+                                        ordered_list_item: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 8, marginLeft: 0, paddingLeft: 0 },
+                                        ordered_list_icon: { marginRight: 8, minWidth: 22, marginTop: 2, fontSize: 14, fontWeight: '600', color: '#2563eb' },
+                                        ordered_list_content: { flex: 1, marginLeft: 0, paddingLeft: 0, paddingRight: 8 },
+                                        heading1: { fontSize: 20, fontWeight: 'bold', marginTop: 20, marginBottom: 12, marginLeft: 0, paddingLeft: 0, paddingBottom: 6, color: '#111827', borderBottomWidth: 1, borderBottomColor: '#e5e7eb' },
+                                        heading2: { fontSize: 18, fontWeight: 'bold', marginTop: 16, marginBottom: 10, marginLeft: 0, paddingLeft: 0, color: '#1f2937' },
+                                        heading3: { fontSize: 16, fontWeight: '600', marginTop: 14, marginBottom: 8, marginLeft: 0, paddingLeft: 0, color: '#374151' },
+                                        text: { color: '#1f2937', fontSize: 14, lineHeight: 22 },
+                                        link: { color: '#2563eb', textDecorationLine: 'underline' },
+                                        blockquote: { borderLeftWidth: 4, borderLeftColor: '#2563eb', paddingLeft: 16, paddingVertical: 8, marginVertical: 12, marginLeft: 0, backgroundColor: '#f8fafc', borderRadius: 8 },
                                     }}
                                     mergeStyle={false}
                                 >
                                     {displayText}
                                 </Markdown>
 
-                                {/* Nút phát âm - chỉ hiển thị cho tin nhắn AI */}
-                                <TouchableOpacity
-                                    onPress={handleSpeak}
-                                    style={{
-                                        flexDirection: 'row',
-                                        alignItems: 'center',
-                                        marginTop: 8,
-                                        alignSelf: 'flex-start',
-                                    }}
-                                >
-                                    <MaterialIcons
-                                        name={isThisSpeaking ? 'volume-up' : 'volume-off'}
-                                        size={16}
-                                        color={isThisSpeaking ? '#2563eb' : '#9ca3af'}
-                                    />
-                                    <Text style={{
-                                        fontSize: 11,
-                                        color: isThisSpeaking ? '#2563eb' : '#9ca3af',
-                                        marginLeft: 4,
-                                    }}>
-                                        {isThisSpeaking ? 'Đang đọc...' : 'Đọc to'}
-                                    </Text>
-                                </TouchableOpacity>
+                                {!isUser && item.meta?.artifacts && item.meta.artifacts.length > 0 && (
+                                    <View style={{ marginTop: 12 }}>
+                                        <Text style={{ fontSize: 13, fontWeight: '600', color: '#374151', marginBottom: 8 }}>
+                                            📎 Tệp đính kèm ({item.meta.artifacts.length}):
+                                        </Text>
+                                        {item.meta.artifacts.map((artifact, idx) => (
+                                            <ArtifactItem key={idx} artifact={artifact} />
+                                        ))}
+                                    </View>
+                                )}
+
+                                {!isStreaming && (
+                                    <TouchableOpacity
+                                        onPress={handleSpeak}
+                                        style={{
+                                            flexDirection: 'row',
+                                            alignItems: 'center',
+                                            marginTop: 8,
+                                            alignSelf: 'flex-start',
+                                        }}
+                                    >
+                                        <MaterialIcons
+                                            name={isThisSpeaking ? 'volume-up' : 'volume-off'}
+                                            size={16}
+                                            color={isThisSpeaking ? '#2563eb' : '#9ca3af'}
+                                        />
+                                        <Text style={{
+                                            fontSize: 11,
+                                            color: isThisSpeaking ? '#2563eb' : '#9ca3af',
+                                            marginLeft: 4,
+                                        }}>
+                                            {isThisSpeaking ? 'Đang đọc...' : 'Đọc'}
+                                        </Text>
+                                    </TouchableOpacity>
+                                )}
                             </View>
                         )}
                         <Text style={{
@@ -265,5 +187,3 @@ const MessageItem = memo(({
         </TouchableOpacity>
     );
 });
-
-export default MessageItem;

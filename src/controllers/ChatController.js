@@ -257,12 +257,16 @@ class ChatController {
         }
     }
 
+    // Bump this when message mapping logic changes to invalidate stale caches
+    static CACHE_VERSION = 'v4';
+
     async _saveConversationToCache() {
         if (!this.conversationId) return;
         try {
             const messages = this.chatModel.getMessages();
             if (messages.length === 0) return;
-            await AsyncStorage.setItem(`conv_${this.conversationId}`, JSON.stringify(messages));
+            const key = `conv_${ChatController.CACHE_VERSION}_${this.conversationId}`;
+            await AsyncStorage.setItem(key, JSON.stringify(messages));
         } catch (error) {
             console.error('Cache error:', error);
         }
@@ -270,7 +274,8 @@ class ChatController {
 
     async _loadConversationFromCache(conversationId) {
         try {
-            const cached = await AsyncStorage.getItem(`conv_${conversationId}`);
+            const key = `conv_${ChatController.CACHE_VERSION}_${conversationId}`;
+            const cached = await AsyncStorage.getItem(key);
             if (cached) {
                 const messages = JSON.parse(cached);
                 this.chatModel.clearMessages();
@@ -613,7 +618,7 @@ class ChatController {
 
                     const q = ev.interrupt.question || 'Cần xác nhận từ bạn.';
                     const opts = ev.interrupt.options?.length
-                        ? `\n${ev.interrupt.options.map((o, i) => `${i + 1}. ${o}`).join('\n')}`
+                        ? `\n${ev.interrupt.options.map((o, i) => `${String.fromCharCode(64 + i + 1)}. ${o}`).join('\n')}`
                         : '';
 
                     this.chatModel.addMessage({
@@ -747,14 +752,13 @@ class ChatController {
                     const last = this.chatModel.getMessages().slice().reverse().find((m) => !m.isUser);
 
                     if (token && this.runId && last) {
-                        const hasExistingCitations = last.meta?.citations?.length > 0;
+                        const hasExistingCitations = last.meta?.citations?.passages?.length > 0;
                         const hasExistingArtifacts = last.meta?.artifacts?.length > 0;
 
                         // Fetch artifacts nếu chưa có
                         if (!hasExistingArtifacts) {
                             AgentApiService.fetchArtifacts(token, this.runId)
                                 .then((resp) => {
-                                    console.log('📦 Artifacts response:', resp);
                                     const artifacts = resp?.data?.artifacts || resp?.data || [];
                                     if (artifacts.length > 0) {
                                         const now = this.chatModel.getMessages();
@@ -766,36 +770,36 @@ class ChatController {
                                                     ...curMeta,
                                                     artifacts: artifacts.map(art => ({
                                                         ...art,
-                                                        url: art.url || art.signed_url || null
-                                                    }))
-                                                }
+                                                        url: art.url || art.signed_url || null,
+                                                    })),
+                                                },
                                             });
                                             onMessagesUpdate?.();
                                         }
                                     }
                                 })
-                                .catch((error) => {
-                                    console.error('Failed to fetch artifacts:', error);
-                                });
+                                .catch(() => { /* 404 = run không có artifacts, bình thường */ });
                         }
 
                         // Fetch citations nếu chưa có
                         if (!hasExistingCitations) {
                             AgentApiService.fetchCitations(token, this.runId)
                                 .then((resp) => {
-                                    const cites = resp?.data?.citations || resp?.data || [];
+                                    // API returns { passages: [...], files: [...] }
+                                    const citationsData = resp?.data;
+                                    if (!citationsData?.passages?.length) return;
                                     const now = this.chatModel.getMessages();
                                     const cur = now.find((m) => m.id === last.id);
                                     if (!cur) return;
                                     const curMeta = cur.meta || {};
                                     this.chatModel.updateMessage(last.id, {
-                                        meta: { ...curMeta, citations: Array.isArray(cites) ? cites : [] },
+                                        meta: { ...curMeta, citations: citationsData },
                                     });
+                                    // Save cache AFTER citations are populated
+                                    this._saveConversationToCache();
                                     onMessagesUpdate?.();
                                 })
-                                .catch((error) => {
-                                    console.error('Failed to fetch citations:', error);
-                                });
+                                .catch(() => { /* 404 = run không có citations, bình thường */ });
                         }
                     }
 
@@ -823,7 +827,6 @@ class ChatController {
             case 'HITL_INTERRUPT_MESSAGE': {
                 console.log('HITL_INTERRUPT_MESSAGE:', JSON.stringify(ev, null, 2));
 
-                // Lấy interrupt data từ event
                 const interruptData = ev.interrupt || ev.data || {
                     id: ev.interrupt_id,
                     run_id: ev.run_id,
@@ -832,17 +835,34 @@ class ChatController {
                     reason: ev.reason || 'information_gathering',
                 };
 
+                // Preserve options from RUN_FINISHED if this event has none
+                const newOptions = interruptData.options || [];
+                if (newOptions.length === 0 && this.pendingInterrupt?.options?.length > 0) {
+                    interruptData.options = this.pendingInterrupt.options;
+                }
+                // Preserve question too if missing
+                if (!interruptData.question && this.pendingInterrupt?.question) {
+                    interruptData.question = this.pendingInterrupt.question;
+                }
+
                 this.pendingInterrupt = interruptData;
 
                 const q = interruptData.question || 'Cần xác nhận từ bạn.';
                 const opts = interruptData.options?.length
-                    ? `\n${interruptData.options.map((o, i) => `${i + 1}. ${o}`).join('\n')}`
+                    ? `\n${interruptData.options.map((o, i) => `${String.fromCharCode(64 + i + 1)}. ${o}`).join('\n')}`
                     : '';
-                this.chatModel.addMessage({
-                    text: `${q}${opts}`,
-                    isUser: false,
-                    status: 'sent',
-                });
+                const newText = `${q}${opts}`;
+
+                // Skip duplicate if RUN_FINISHED already added this message
+                const msgs = this.chatModel.getMessages();
+                const lastBot = msgs.slice().reverse().find(m => !m.isUser);
+                if (!lastBot || lastBot.text !== newText) {
+                    this.chatModel.addMessage({
+                        text: newText,
+                        isUser: false,
+                        status: 'sent',
+                    });
+                }
                 onMessagesUpdate?.();
                 break;
             }

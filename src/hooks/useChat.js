@@ -38,19 +38,49 @@ export function useChat() {
                 return false;
             }
 
-            // Bỏ qua message là log nội bộ
+            // Bỏ qua message là log nội bộ / process
             if (msg.text) {
                 const lowerText = msg.text.toLowerCase();
                 const hidePatterns = [
+                    // Internal logs
                     'tìm kiếm kỹ năng',
                     'observe the result',
-                    '🔍',
-                    '📢',
-                    'tool call',
-                    'thinking',
+                    '🔍', '📢',
+                    'tool call', 'thinking',
+                    // Agent process steps
+                    'tôi sẽ tìm kiếm',
+                    'tôi sẽ tra cứu',
+                    'tôi sẽ kiểm tra',
+                    'tôi sẽ thực hiện',
+                    'tôi sẽ xem xét',
+                    'tôi cần tìm kiếm',
+                    'tôi đang tìm kiếm',
+                    'tôi đang thực hiện',
+                    'tôi đang xử lý',
+                    'thực hiện tìm kiếm',
+                    'thực hiện kế hoạch',
+                    'kế hoạch hành động',
+                    'đang thực hiện bước',
+                    'bước tiếp theo',
+                    'tôi sẽ sử dụng công cụ',
+                    'gọi công cụ',
+                    'calling tool',
+                    // Document mode / context confirmation
+                    'xác nhận chế độ',
+                    'xác nhận ngữ cảnh',
+                    'chế độ tài liệu',
+                    'document mode',
+                    'ngữ cảnh tài liệu',
+                    'vui lòng xác nhận',
+                    'để tôi hiểu rõ hơn ngữ cảnh',
+                    'bạn muốn tôi phân tích',
+                    'bạn muốn tôi tìm kiếm trong',
+                    // Context gathering before answer
+                    'trước khi trả lời, tôi cần',
+                    'trước khi thực hiện',
                 ];
 
-                // ✅ KHÔNG lọc "đang suy nghĩ" nếu là message streaming
+                // Không lọc "đang suy nghĩ" nếu là message streaming
                 if (msg.status !== 'streaming' && lowerText.includes('đang suy nghĩ')) {
                     return false;
                 }
@@ -59,6 +89,12 @@ export function useChat() {
                     if (lowerText.includes(pattern.toLowerCase())) {
                         return false;
                     }
+                }
+
+                // Bỏ message chỉ có nội dung là tool call JSON
+                if (/^\s*\{[\s\S]*"tool"[\s\S]*\}\s*$/.test(msg.text) ||
+                    /^\s*\{[\s\S]*"function"[\s\S]*\}\s*$/.test(msg.text)) {
+                    return false;
                 }
             }
 

@@ -1,4 +1,58 @@
 /**
+ * Collapse consecutive bot messages per turn to only the last meaningful one.
+ * Intermediate agent steps (thinking, retries, planning) are discarded;
+ * only the final answer per turn is kept — matching web behaviour.
+ */
+function collapseAssistantTurns(rows) {
+    if (rows.length === 0) return rows;
+
+    const result = [];
+    let pending = [];
+
+    const flush = () => {
+        if (pending.length === 0) return;
+
+        // Last bot message that has real text content
+        const lastText = [...pending].reverse().find(m => m.text?.trim().length > 0);
+
+        if (lastText) {
+            // Merge artifacts from ALL messages in this turn
+            const artifacts = pending.flatMap(m => m.meta?.artifacts || []);
+            // Citations are a { passages, files } object — take from the last message that has them
+            const lastWithCitations = [...pending].reverse().find(m => m.meta?.citations);
+            const citations = lastWithCitations?.meta?.citations || null;
+            const final = { ...lastText };
+            if (artifacts.length || citations) {
+                final.meta = {
+                    ...(final.meta || {}),
+                    ...(artifacts.length ? { artifacts } : {}),
+                    ...(citations ? { citations } : {}),
+                };
+            }
+            result.push(final);
+        } else {
+            // No text — keep last message only if it has artifacts
+            const withArtifacts = [...pending].reverse().find(m => m.meta?.artifacts?.length);
+            if (withArtifacts) result.push(withArtifacts);
+        }
+
+        pending = [];
+    };
+
+    for (const row of rows) {
+        if (row.isUser) {
+            flush();
+            result.push(row);
+        } else {
+            pending.push(row);
+        }
+    }
+    flush();
+
+    return result;
+}
+
+/**
  * Map MESSAGES_SNAPSHOT items to UI messages { id, text, isUser, timestamp, status, meta }.
  * @see Assistant — API & Data Protocol Reference §6.4
  */
@@ -150,18 +204,12 @@ export function mapSnapshotToChatRows(messages) {
             }
         }
 
-        // §6.4.3: System message
-        if (m.role === 'system' && typeof m.content === 'string') {
-            rows.push({
-                id,
-                text: m.content,
-                isUser: false,
-                timestamp,
-                status: 'sent',
-                meta: m.metadata || null,
-            });
+        // §6.4.3: System message — skip, not user-facing
+        if (m.role === 'system') {
+            continue;
         }
     }
 
-    return rows;
+    // Only show the final answer per bot turn, discarding intermediate steps
+    return collapseAssistantTurns(rows);
 }

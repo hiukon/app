@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useCallback, memo } from 'react';
+import React, { useEffect, useState, useRef, useCallback, useMemo, memo } from 'react';
 import {
     View,
     Text,
@@ -72,12 +72,70 @@ const sanitizeTechnicalText = (text) => {
     return patterns.some(p => p.test(text)) ? 'Đã có lỗi xảy ra. Vui lòng thử lại.' : text;
 };
 
+// Patterns nhận diện nội dung process/internal của agent
+const PROCESS_PATTERNS = [
+    'tôi đã trả về phản hồi không hợp lệ',
+    'để tôi thử lại',
+    'tìm kiếm báo cáo',
+    'tìm kiếm thông tin',
+    'người dùng muốn biết',
+    'tìm kiếm kỹ năng',
+    'observe the result',
+    'dựa trên kết quả',
+    'theo hướng dẫn',
+    'tôi sẽ tổng hợp',
+    'tôi cần tìm kiếm',
+    'tôi đã tìm kiếm',
+    'sau khi tìm kiếm',
+    'tìm thấy kỹ năng',
+    'kích hoạt kỹ năng',
+    'cortex',
+    // Process steps
+    'tôi sẽ tìm kiếm',
+    'tôi sẽ tra cứu',
+    'tôi sẽ kiểm tra',
+    'tôi sẽ thực hiện',
+    'tôi sẽ xem xét',
+    'tôi cần tìm',
+    'tôi đang tìm kiếm',
+    'tôi đang thực hiện',
+    'tôi đang xử lý',
+    'tôi đang phân tích',
+    'thực hiện tìm kiếm',
+    'thực hiện kế hoạch',
+    'kế hoạch hành động',
+    'đang thực hiện bước',
+    'bước tiếp theo là',
+    'hãy để tôi tìm',
+    'cho phép tôi tìm',
+    'tôi sẽ sử dụng công cụ',
+    'gọi công cụ',
+    'calling tool',
+    // Document mode confirmation
+    'xác nhận chế độ',
+    'xác nhận ngữ cảnh',
+    'chế độ tài liệu',
+    'document mode',
+    'ngữ cảnh tài liệu',
+    'vui lòng xác nhận',
+    'để tôi hiểu rõ hơn ngữ cảnh',
+    'bạn muốn tôi phân tích',
+    'bạn muốn tôi tìm kiếm trong',
+    'trước khi trả lời, tôi cần',
+    'trước khi thực hiện',
+];
+
+const isProcessLine = (line) => {
+    const lower = line.toLowerCase().trim();
+    return PROCESS_PATTERNS.some(p => lower.includes(p));
+};
+
 // Làm sạch text từ bot
 const cleanBotText = (text) => {
     if (!text) return null;
     const lowerText = text.toLowerCase();
 
-    // ✅ Kiểm tra nếu đây là message chứa báo cáo
+    // Kiểm tra nếu đây là message chứa báo cáo - giữ nguyên toàn bộ
     const isReportMessage =
         lowerText.includes('báo cáo') ||
         lowerText.includes('tải xuống') ||
@@ -86,54 +144,38 @@ const cleanBotText = (text) => {
         text.length > 500;
 
     if (isReportMessage) {
-        // Chỉ xóa timestamp, giữ nguyên toàn bộ nội dung
         let cleaned = text
             .replace(/\d{1,2}:\d{2}:\d{2}\s*(AM|PM)/gi, '')
             .replace(/\d{1,2}:\d{2}:\d{2}\s*(am|pm)/gi, '')
             .trim();
-
         return cleaned.length > 0 ? cleaned : text;
     }
 
-    const lines = text.split('\n');
-    const filteredLines = lines.filter(line => {
+    // Lọc từng dòng
+    const filteredLines = text.split('\n').filter(line => {
         const lowerLine = line.toLowerCase().trim();
         if (line.trim().length < 10) return false;
-
-        // Các pattern cần loại bỏ
-        const excludePatterns = [
-            'tôi đã trả về phản hồi không hợp lệ',
-            'để tôi thử lại',
-            'tìm kiếm báo cáo',
-            'tìm kiếm thông tin',
-            'người dùng muốn biết',
-            'tìm kiếm kỹ năng',
-            'observe the result',
-            'dựa trên kết quả',
-            'theo hướng dẫn',
-            'tôi sẽ tổng hợp',
-            'tôi cần tìm kiếm',
-            'tôi đã tìm kiếm',
-            'sau khi tìm kiếm',
-            'tìm thấy kỹ năng',
-            'kích hoạt kỹ năng',
-            'cortex',
-        ];
-
-        if (excludePatterns.some(pattern => lowerLine.includes(pattern))) return false;
-
-        // Lọc timestamp
+        if (isProcessLine(line)) return false;
         if (lowerLine.match(/^\d{1,2}:\d{2}:\d{2}\s*(am|pm)?$/)) return false;
         if (lowerLine.match(/\d{1,2}:\d{2}:\d{2}\s*(am|pm)/i)) return false;
-
         return true;
     });
 
     let cleaned = filteredLines.join('\n').trim();
 
     if (cleaned) {
-        const paragraphs = cleaned.split(/\n\s*\n/);
-        cleaned = paragraphs[paragraphs.length - 1];
+        // Lấy paragraph cuối cùng KHÔNG phải process
+        const paragraphs = cleaned.split(/\n\s*\n/).filter(p => p.trim().length >= 10);
+        let chosen = '';
+        for (let i = paragraphs.length - 1; i >= 0; i--) {
+            const p = paragraphs[i].trim();
+            const lowerP = p.toLowerCase();
+            if (!PROCESS_PATTERNS.some(pat => lowerP.includes(pat))) {
+                chosen = p;
+                break;
+            }
+        }
+        cleaned = chosen || paragraphs[paragraphs.length - 1] || cleaned;
     }
 
     cleaned = cleaned?.replace(/\d{1,2}:\d{2}:\d{2}\s*(AM|PM)/gi, '');
@@ -445,10 +487,21 @@ const MessageItem = memo(({
     onSpeak,
     isSpeaking,
     onStopSpeaking,
+    onCitationPress,
 }) => {
     const isUser = item.isUser;
     const isStreaming = !isUser && item.status === 'streaming';
 
+    // Normalize citations: live chat gives { passages, files }; snapshot may give the same or null
+    const rawCitations = item.meta?.citations;
+    const citations = rawCitations && !Array.isArray(rawCitations) && rawCitations.passages
+        ? rawCitations
+        : (Array.isArray(rawCitations) && rawCitations[0]?.passages ? rawCitations[0] : null);
+
+    const mdRules = useMemo(
+        () => buildMarkdownRules(citations, onCitationPress),
+        [citations, onCitationPress]
+    );
 
     let displayText = '';
     if (isUser) {
@@ -472,18 +525,16 @@ const MessageItem = memo(({
         displayText = convertTokensToDisplayWithMap(cleaned, domainIdToCodeMap);
         displayText = displayText
             .split('\n')
-            .map(line => line.trimStart())  // Xóa khoảng trắng đầu dòng
+            .map(line => line.trimStart())
             .join('\n')
-            // Thêm dòng trống trước các bullet list (dấu - hoặc *)
             .replace(/([^\n])\n([-*]\s)/g, '$1\n\n$2')
-            // Thêm dòng trống trước các numbered list
             .replace(/([^\n])\n(\d+\.\s)/g, '$1\n\n$2')
-            // Thêm dòng trống trước heading
             .replace(/([^\n])\n(#{1,6}\s)/g, '$1\n\n$2')
-            // Thêm dòng trống trước bold text đứng riêng 1 dòng (như **Phân loại...:**)
             .replace(/([^\n])\n(\*\*[^*]+\*\*[:\s])/g, '$1\n\n$2')
-            // Chuẩn hóa dòng trống (tối đa 2)
             .replace(/\n{3,}/g, '\n\n');
+
+        // Replace [^N] with {ref:N} — not markdown syntax, passes through to text nodes
+        displayText = displayText.replace(/\[\^(\d+)\]/g, (_, n) => `{ref:${n}}`);
 
         if (!displayText.trim()) return null;
     }
@@ -672,6 +723,7 @@ const MessageItem = memo(({
                                             borderRadius: 8,
                                         },
                                     }}
+                                    rules={mdRules}
                                     mergeStyle={false}
                                 >
                                     {displayText}
@@ -783,12 +835,158 @@ const SkeletonHistoryItem = () => (
     </View>
 );
 
+// ==================== CITATION UTILS ====================
+
+// Unicode circled numbers: ①-⑳ (1-20), ㉑-㉟ (21-35), ㊱-㊿ (36-50)
+const toCircledNumber = (n) => {
+    const num = Number(n);
+    if (num >= 1 && num <= 20) return String.fromCodePoint(0x245F + num);
+    if (num >= 21 && num <= 35) return String.fromCodePoint(0x323C + num);
+    if (num >= 36 && num <= 50) return String.fromCodePoint(0x328D + num);
+    return `(${n})`;
+};
+
+// ==================== TABLE RULES FOR MARKDOWN ====================
+
+const TABLE_CELL_WIDTH = 130;
+
+const baseMarkdownTableRules = {
+    table: (node, children) => (
+        <ScrollView
+            key={node.key}
+            horizontal
+            showsHorizontalScrollIndicator
+            style={{ marginVertical: 10 }}
+        >
+            <View style={{
+                borderWidth: 1,
+                borderColor: '#d1d5db',
+                borderRadius: 8,
+                overflow: 'hidden',
+                backgroundColor: '#ffffff',
+            }}>
+                {children}
+            </View>
+        </ScrollView>
+    ),
+    thead: (node, children) => (
+        <View key={node.key} style={{ backgroundColor: '#ede9fe' }}>
+            {children}
+        </View>
+    ),
+    tbody: (node, children) => (
+        <View key={node.key}>{children}</View>
+    ),
+    tr: (node, children) => (
+        <View
+            key={node.key}
+            style={{
+                flexDirection: 'row',
+                borderBottomWidth: 1,
+                borderBottomColor: '#e5e7eb',
+            }}
+        >
+            {children}
+        </View>
+    ),
+    th: (node, children) => (
+        <View
+            key={node.key}
+            style={{
+                width: TABLE_CELL_WIDTH,
+                paddingHorizontal: 12,
+                paddingVertical: 10,
+                borderRightWidth: 1,
+                borderRightColor: '#c4b5fd',
+                justifyContent: 'center',
+            }}
+        >
+            <Text style={{ fontWeight: '700', color: '#5b21b6', fontSize: 13 }}>
+                {children}
+            </Text>
+        </View>
+    ),
+    td: (node, children) => (
+        <View
+            key={node.key}
+            style={{
+                width: TABLE_CELL_WIDTH,
+                paddingHorizontal: 12,
+                paddingVertical: 9,
+                borderRightWidth: 1,
+                borderRightColor: '#e5e7eb',
+                justifyContent: 'center',
+            }}
+        >
+            <Text style={{ color: '#374151', fontSize: 13 }}>
+                {children}
+            </Text>
+        </View>
+    ),
+};
+
+
+// {ref:N} placeholder is not special markdown syntax so it passes through the parser into text nodes
+const buildMarkdownRules = (citations, onCitationPress) => ({
+    ...baseMarkdownTableRules,
+    text: (node, children, parent, styles) => {
+        const content = node.content || '';
+        if (!content.includes('{ref:')) {
+            return <Text key={node.key} style={styles.text}>{content}</Text>;
+        }
+        const segments = [];
+        const regex = /\{ref:(\d+)\}/g;
+        let lastIndex = 0;
+        let match;
+        while ((match = regex.exec(content)) !== null) {
+            if (match.index > lastIndex) {
+                segments.push(content.slice(lastIndex, match.index));
+            }
+            const refId = match[1];
+            const id = Number(refId);
+            const passage = citations?.passages?.find(
+                p => p.id === id || String(p.id) === refId
+            );
+            const file = passage
+                ? citations?.files?.find(f => f.id === passage.file_id)
+                : null;
+            segments.push(
+                <Text
+                    key={`ref-${match.index}`}
+                    onPress={() => onCitationPress?.({ passage: passage || null, file: file || null, refId })}
+                    style={{ color: '#2563eb', fontSize: 15 }}
+                >
+                    {toCircledNumber(refId)}
+                </Text>
+            );
+            lastIndex = regex.lastIndex;
+        }
+        if (lastIndex < content.length) {
+            segments.push(content.slice(lastIndex));
+        }
+        return <Text key={node.key} style={styles.text}>{segments}</Text>;
+    },
+    link: (node, children, parent, styles) => {
+        const href = node.attributes?.href || '';
+        return (
+            <Text
+                key={node.key}
+                style={{ color: '#2563eb', textDecorationLine: 'underline' }}
+                onPress={() => { try { Linking.openURL(href); } catch (_) { } }}
+            >
+                {children}
+            </Text>
+        );
+    },
+});
+
 // ==================== MAIN COMPONENT ====================
 
 export default function DraggableChatBubble() {
     const { user } = useAuth();
     const partnerId = user?.partner_id || '01km7vpjm4hcq4jbj35m680m5p';
     const [interruptAnswer, setInterruptAnswer] = useState('');
+    const [citationModal, setCitationModal] = useState(null); // { passage, file }
     // Animation shared values
     const translateX = useSharedValue(0);
     const translateY = useSharedValue(0);
@@ -820,6 +1018,7 @@ export default function DraggableChatBubble() {
     const recordingRef = useRef(null);
     const meterIntervalRef = useRef(null);
     const [hasVoiceResult, setHasVoiceResult] = useState(false);
+    const committedTextRef = useRef('');
 
     const micScale = useSharedValue(1);
     const ringScale = useSharedValue(1);
@@ -891,17 +1090,7 @@ export default function DraggableChatBubble() {
 
     // VOICE RECOGNITION
 
-
-    const handleVoiceTranscript = useCallback((text) => {
-        if (!text || !text.trim()) return;
-        setInputText(prev => {
-            const trimmedPrev = prev.trim();
-            if (trimmedPrev.length === 0) return text;
-            return prev + (prev.endsWith(' ') ? '' : ' ') + text;
-        });
-    }, []);
-
-    // Voice event listeners - ĐÃ SỬA
+    // Voice event listeners
     useEffect(() => {
         const onSpeechStart = () => {
             setIsListening(true);
@@ -912,14 +1101,29 @@ export default function DraggableChatBubble() {
             setIsListening(false);
         };
 
-        // BỎ onSpeechPartialResults để tránh lặp text
-        // Chỉ giữ onSpeechResults cho kết quả cuối cùng
+        // Partial results: thay thế phần voice trong input (không append)
+        const onSpeechPartialResults = (event) => {
+            if (event.value && event.value.length > 0) {
+                const partialText = event.value[0];
+                if (partialText && partialText.trim()) {
+                    const base = committedTextRef.current;
+                    const sep = base && !base.endsWith(' ') ? ' ' : '';
+                    setInputText(base + sep + partialText);
+                }
+            }
+        };
+
+        // Final results: commit text vào ref
         const onSpeechResults = (event) => {
             if (event.value && event.value.length > 0) {
                 const spokenText = event.value[0];
                 setHasVoiceResult(true);
                 if (spokenText && spokenText.trim()) {
-                    handleVoiceTranscript(spokenText);
+                    const base = committedTextRef.current;
+                    const sep = base && !base.endsWith(' ') ? ' ' : '';
+                    const newCommitted = (base + sep + spokenText).trimStart();
+                    committedTextRef.current = newCommitted;
+                    setInputText(newCommitted);
                 }
             }
         };
@@ -942,14 +1146,15 @@ export default function DraggableChatBubble() {
 
         Voice.onSpeechStart = onSpeechStart;
         Voice.onSpeechEnd = onSpeechEnd;
-        Voice.onSpeechResults = onSpeechResults; // Chỉ lấy kết quả cuối
+        Voice.onSpeechPartialResults = onSpeechPartialResults;
+        Voice.onSpeechResults = onSpeechResults;
         Voice.onSpeechError = onSpeechError;
 
         return () => {
-            Voice.removeAllListeners(); // Remove listeners trước
-            Voice.destroy().catch(() => { }); // Destroy sau
+            Voice.removeAllListeners();
+            Voice.destroy().catch(() => { });
         };
-    }, [handleVoiceTranscript, hasVoiceResult]);
+    }, [hasVoiceResult]);
 
     const startListening = async () => {
         try {
@@ -970,8 +1175,6 @@ export default function DraggableChatBubble() {
                     Alert.alert('Permission Denied', 'Microphone permission is required');
                     return;
                 }
-
-                // Kiểm tra speech recognition có sẵn không
             }
 
             // Request permission cho iOS
@@ -983,6 +1186,8 @@ export default function DraggableChatBubble() {
                 }
             }
 
+            // Lưu text hiện tại làm base trước khi bắt đầu nhận dạng
+            committedTextRef.current = inputText;
             setHasVoiceResult(false);
             await Voice.start('vi-VN');
             setIsListening(true);
@@ -990,7 +1195,6 @@ export default function DraggableChatBubble() {
             console.error('Voice start error:', error);
             setIsListening(false);
 
-            // Hiển thị lỗi thân thiện
             if (error.code === 'E_NO_RECOGNIZER') {
                 Alert.alert('Error', 'Speech recognition not supported');
             }
@@ -1185,6 +1389,7 @@ export default function DraggableChatBubble() {
     // HANDLERS
     const handleTextChange = (text) => {
         setInputText(text);
+        if (!isListening) committedTextRef.current = text;
         const cursorPos = text.length;
 
         const lastSlash = text.lastIndexOf('/', cursorPos);
@@ -1289,6 +1494,20 @@ export default function DraggableChatBubble() {
             return;
         }
 
+        // Route to answerInterrupt for free-text interrupt types
+        if (pendingInterrupt) {
+            const reason = pendingInterrupt.reason || '';
+            const hasFreeText = ['information_gathering', 'upload_required', 'policy_hold'].includes(reason)
+                || !(pendingInterrupt.options?.length > 0);
+            if (hasFreeText) {
+                const ans = inputText.trim();
+                setInputText('');
+                committedTextRef.current = '';
+                await answerInterrupt(ans);
+                return;
+            }
+        }
+
         let currentMessage = inputText;
 
         Object.keys(selectedSuggestions).forEach(displayKey => {
@@ -1303,6 +1522,7 @@ export default function DraggableChatBubble() {
         });
 
         setInputText('');
+        committedTextRef.current = '';
         setSelectedSuggestions({});
         const pending = [...attachments];
         setAttachments([]);
@@ -1393,6 +1613,10 @@ export default function DraggableChatBubble() {
     }, [messages]);
 
     // RENDER
+    const handleCitationPress = useCallback((data) => {
+        setCitationModal(data);
+    }, []);
+
     const renderMessage = useCallback(({ item }) => (
         <MessageItem
             item={item}
@@ -1406,8 +1630,9 @@ export default function DraggableChatBubble() {
             onSpeak={speakMessage}
             isSpeaking={speakingMessageId}
             onStopSpeaking={stopSpeaking}
+            onCitationPress={handleCitationPress}
         />
-    ), [formatTimestamp, thinkingDots, domainIdToCodeMap, speakMessage, speakingMessageId, stopSpeaking]);
+    ), [formatTimestamp, thinkingDots, domainIdToCodeMap, speakMessage, speakingMessageId, stopSpeaking, handleCitationPress]);
 
     const renderHistoryItem = useCallback(({ item }) => {
         const displayTitle = getDisplayTitle(item.title) || 'Cuộc trò chuyện';
@@ -1575,89 +1800,86 @@ export default function DraggableChatBubble() {
                         />
 
                         {/* Pending Interrupt */}
-                        {pendingInterrupt && (
-                            <View style={{
-                                marginHorizontal: 12,
-                                marginTop: 8,
-                                backgroundColor: '#fff7ed',
-                                borderWidth: 1,
-                                borderColor: '#fdba74',
-                                borderRadius: 12,
-                                padding: 10,
-                            }}>
-                                <Text style={{ fontSize: 12, color: '#9a3412', marginBottom: 6 }}>
-                                    {pendingInterrupt.question || 'Vui lòng cung cấp thông tin:'}
-                                </Text>
+                        {pendingInterrupt && (() => {
+                            const opts = (pendingInterrupt.options || []).filter(o => o?.trim());
+                            const isApproval = ['human_approval', 'database_modification', 'multi_step_confirm', 'error_recovery'].includes(pendingInterrupt.reason);
+                            const displayOpts = opts.length > 0 ? opts : (isApproval ? ['Đồng ý', 'Từ chối'] : []);
+                            const isFreeText = displayOpts.length === 0;
 
-                                {pendingInterrupt.reason === 'information_gathering' ||
-                                    pendingInterrupt.reason === 'upload_required' ? (
-                                    // ✅ Hiển thị text input
-                                    <View>
-                                        <TextInput
-                                            style={{
-                                                backgroundColor: 'white',
-                                                borderWidth: 1,
-                                                borderColor: '#fdba74',
-                                                borderRadius: 8,
-                                                padding: 10,
-                                                marginBottom: 0,
-                                                fontSize: 14,
-                                            }}
-                                            placeholder="Nhập câu trả lời..."
-                                            value={interruptAnswer}
-                                            onChangeText={setInterruptAnswer}
-                                            multiline
-                                        />
-                                        <Text style={{
-                                            fontSize: 12,
-                                            color: '#9a3412',
-                                            marginBottom: 8,
-                                            fontStyle: 'italic',
-                                        }}>
+                            // For free-text interrupts, just show a subtle hint — user types in main input
+                            if (isFreeText) {
+                                return (
+                                    <View style={{
+                                        marginHorizontal: 12,
+                                        marginTop: 8,
+                                        backgroundColor: '#fff7ed',
+                                        borderWidth: 1,
+                                        borderColor: '#fdba74',
+                                        borderRadius: 12,
+                                        paddingHorizontal: 14,
+                                        paddingVertical: 10,
+                                        flexDirection: 'row',
+                                        alignItems: 'center',
+                                    }}>
+                                        <MaterialIcons name="chat-bubble-outline" size={16} color="#d97706" style={{ marginRight: 8 }} />
+                                        <Text style={{ fontSize: 13, color: '#b45309', flex: 1 }}>
+                                            Nhập câu trả lời vào ô bên dưới và gửi
                                         </Text>
-                                        <TouchableOpacity
-                                            onPress={() => {
-                                                if (interruptAnswer.trim()) {
-                                                    answerInterrupt(interruptAnswer.trim());
-                                                    setInterruptAnswer('');
-                                                }
-                                            }}
-                                            style={{
-                                                backgroundColor: '#fb923c',
-                                                borderRadius: 8,
-                                                padding: 10,
-                                                alignItems: 'center',
-                                            }}
-                                        >
-                                            <Text style={{ color: 'white', fontWeight: '600' }}>Gửi</Text>
-                                        </TouchableOpacity>
                                     </View>
-                                ) : (
-                                    // Hiển thị buttons cho các reason khác
-                                    <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-                                        {(pendingInterrupt.options?.filter(opt => opt && opt.trim()).length > 0
-                                            ? pendingInterrupt.options
-                                            : ['Đồng ý', 'Từ chối']
-                                        ).map((opt, idx) => (
-                                            <TouchableOpacity
-                                                key={idx}
-                                                onPress={() => answerInterrupt(opt)}
-                                                style={{
-                                                    backgroundColor: '#fb923c',
-                                                    borderRadius: 999,
-                                                    paddingHorizontal: 10,
-                                                    paddingVertical: 6,
-                                                    marginRight: 8,
-                                                    marginBottom: 6,
-                                                }}
-                                            >
-                                                <Text style={{ color: 'white', fontSize: 12 }}>{opt}</Text>
-                                            </TouchableOpacity>
-                                        ))}
+                                );
+                            }
+
+                            return (
+                                <View style={{
+                                    marginHorizontal: 12,
+                                    marginTop: 8,
+                                    backgroundColor: '#fff7ed',
+                                    borderWidth: 1,
+                                    borderColor: '#fdba74',
+                                    borderRadius: 12,
+                                    padding: 12,
+                                }}>
+                                    {pendingInterrupt.question ? (
+                                        <Text style={{ fontSize: 13, color: '#9a3412', marginBottom: 10, fontWeight: '500', lineHeight: 18 }}>
+                                            {pendingInterrupt.question}
+                                        </Text>
+                                    ) : null}
+
+                                    {/* Selectable options — tap to immediately submit */}
+                                    <View>
+                                        {displayOpts.map((opt, idx) => {
+                                            const label = String.fromCharCode(65 + idx);
+                                            return (
+                                                <TouchableOpacity
+                                                    key={idx}
+                                                    onPress={() => {
+                                                        answerInterrupt(opt);
+                                                    }}
+                                                    style={{
+                                                        flexDirection: 'row',
+                                                        alignItems: 'flex-start',
+                                                        paddingVertical: 8,
+                                                        paddingHorizontal: 10,
+                                                        borderRadius: 8,
+                                                        marginBottom: 4,
+                                                        backgroundColor: '#fef9f0',
+                                                        borderWidth: 1,
+                                                        borderColor: '#fde68a',
+                                                    }}
+                                                >
+                                                    <Text style={{ fontWeight: '700', color: '#b45309', marginRight: 8, minWidth: 22, fontSize: 13 }}>
+                                                        {label}:
+                                                    </Text>
+                                                    <Text style={{ flex: 1, color: '#78350f', fontSize: 13, lineHeight: 18 }}>
+                                                        {opt}
+                                                    </Text>
+                                                </TouchableOpacity>
+                                            );
+                                        })}
                                     </View>
-                                )}
-                            </View>
-                        )}
+                                </View>
+                            );
+                        })()}
 
                         {/* Input Area */}
                         <View style={{
@@ -1680,7 +1902,7 @@ export default function DraggableChatBubble() {
                                     maxHeight: 100,
                                     textAlignVertical: 'top',
                                 }}
-                                placeholder={editingMessageId ? 'Sửa tin nhắn...' : 'Bạn cần tôi giúp gì?'}
+                                placeholder={editingMessageId ? 'Sửa tin nhắn...' : pendingInterrupt ? 'Nhập câu trả lời...' : 'Bạn cần tôi giúp gì?'}
                                 value={inputText}
                                 onChangeText={handleTextChange}
                                 onSelectionChange={(e) => setCursorPosition(e.nativeEvent.selection.start)}
@@ -1879,6 +2101,76 @@ export default function DraggableChatBubble() {
                 onSelectModel={setSelectedModel}
                 onClose={() => setShowModelPicker(false)}
             />
+
+            {/* Citation Modal */}
+            <Modal
+                visible={!!citationModal}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setCitationModal(null)}
+            >
+                <TouchableOpacity
+                    style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' }}
+                    activeOpacity={1}
+                    onPress={() => setCitationModal(null)}
+                >
+                    <TouchableOpacity
+                        activeOpacity={1}
+                        style={{
+                            backgroundColor: 'white',
+                            borderRadius: 16,
+                            padding: 20,
+                            marginHorizontal: 24,
+                            maxHeight: '70%',
+                            width: '88%',
+                            shadowColor: '#000',
+                            shadowOffset: { width: 0, height: 4 },
+                            shadowOpacity: 0.3,
+                            shadowRadius: 8,
+                            elevation: 10,
+                        }}
+                    >
+                        {/* Header */}
+                        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+                            <View style={{
+                                width: 32, height: 32, borderRadius: 16,
+                                backgroundColor: '#dbeafe', alignItems: 'center', justifyContent: 'center',
+                                marginRight: 10,
+                            }}>
+                                <MaterialIcons name="description" size={18} color="#2563eb" />
+                            </View>
+                            <Text style={{ fontSize: 15, fontWeight: '600', color: '#111827', flex: 1 }} numberOfLines={2}>
+                                {citationModal?.file?.original_name || `Tài liệu tham khảo #${citationModal?.refId || ''}`}
+                            </Text>
+                            <TouchableOpacity onPress={() => setCitationModal(null)} style={{ padding: 4 }}>
+                                <MaterialIcons name="close" size={20} color="#6b7280" />
+                            </TouchableOpacity>
+                        </View>
+
+                        {/* Page range badge */}
+                        {citationModal?.passage?.page_range && (
+                            <View style={{
+                                flexDirection: 'row', alignItems: 'center',
+                                marginBottom: 12,
+                            }}>
+                                <MaterialIcons name="bookmark" size={14} color="#6b7280" />
+                                <Text style={{ fontSize: 12, color: '#6b7280', marginLeft: 4 }}>
+                                    Trang {citationModal.passage.page_range}
+                                </Text>
+                            </View>
+                        )}
+
+                        <View style={{ height: 1, backgroundColor: '#e5e7eb', marginBottom: 12 }} />
+
+                        {/* Passage content */}
+                        <ScrollView showsVerticalScrollIndicator={false}>
+                            <Text style={{ fontSize: 14, color: '#374151', lineHeight: 22 }}>
+                                {citationModal?.passage?.text || (citationModal?.passage ? '' : 'Nội dung trích dẫn không có sẵn.')}
+                            </Text>
+                        </ScrollView>
+                    </TouchableOpacity>
+                </TouchableOpacity>
+            </Modal>
         </>
     );
 }
