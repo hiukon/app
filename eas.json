@@ -12,6 +12,10 @@
                 "buildType": "apk",
                 "gradleCommand": ":app:assembleRelease"
             },
+            "ios": {
+                "simulator": false,
+                "distribution": "internal"
+            },
             "env": {
                 "AGENT_API_URL": "https://agent.next.seinetime.ai",
                 "CORE_API_URL": "https://api.next.seinetime.ai",

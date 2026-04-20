@@ -15,9 +15,11 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.hanobrain.app",
+      "icon": "./src/assets/images/chatbot.png",
       "infoPlist": {
         "NSSpeechRecognitionUsageDescription": "Allow HaNoiBrain to recognize your speech",
         "NSMicrophoneUsageDescription": "Allow HaNoiBrain to access your microphone for voice input",
+        "NSPhotoLibraryUsageDescription": "Allow HaNoiBrain to access your photos for file upload",
         "ITSAppUsesNonExemptEncryption": false
       }
     },
@@ -49,6 +51,9 @@
             "compileSdkVersion": 34,
             "targetSdkVersion": 34,
             "buildToolsVersion": "34.0.0"
+          },
+          "ios": {
+            "deploymentTarget": "13.4"
           }
         }
       ]
