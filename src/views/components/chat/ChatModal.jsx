@@ -40,7 +40,9 @@ export default function ChatModal({ visible, onClose }) {
     const [inputText, setInputText] = useState('');
     const [selectedModel, setSelectedModel] = useState('intelligent');
     const { isListening, toggleListening } = useVoiceChat({
-        onTranscript: (text) => setInputText(text),
+        onTranscript: (text) => {
+            setInputText(prev => prev + (prev && !prev.endsWith(' ') ? ' ' : '') + text);
+        },
     });
     const [attachments, setAttachments] = useState([]);
     const [isUploading, setIsUploading] = useState(false);
@@ -297,126 +299,126 @@ export default function ChatModal({ visible, onClose }) {
                             <MaterialIcons name="tune" size={18} color="#6b7280" />
                         </TouchableOpacity>
                     </View>
-                    {isSending ? (
-                        <TouchableOpacity
-                            onPress={cancel}
-                            style={{
-                                backgroundColor: '#ef4444',
-                                width: 40,
-                                height: 40,
-                                borderRadius: 20,
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                            }}
-                        >
-                            <MaterialIcons name="stop" size={20} color="white" />
-                        </TouchableOpacity>
-                    ) : (
-                        <TouchableOpacity
-                            onPress={handleSend}
-                            disabled={isUploading || !inputText.trim()}
-                            style={{
-                                backgroundColor: isUploading || !inputText.trim() ? '#d1d5db' : '#2563eb',
-                                width: 40,
-                                height: 40,
-                                borderRadius: 20,
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                            }}
-                        >
-                            <MaterialIcons
-                                name={editingMessageId ? 'check' : 'arrow-upward'}
-                                size={20}
-                                color="white"
-                            />
-                        </TouchableOpacity>
-                    )}
                 </View>
+                {isSending ? (
+                    <TouchableOpacity
+                        onPress={cancel}
+                        style={{
+                            backgroundColor: '#ef4444',
+                            width: 40,
+                            height: 40,
+                            borderRadius: 20,
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                        }}
+                    >
+                        <MaterialIcons name="stop" size={20} color="white" />
+                    </TouchableOpacity>
+                ) : (
+                    <TouchableOpacity
+                        onPress={handleSend}
+                        disabled={isUploading || !inputText.trim()}
+                        style={{
+                            width: 40,
+                            height: 40,
+                            borderRadius: 20,
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                        }}
+                    >
+                        <MaterialIcons
+                            name={editingMessageId ? 'check' : 'arrow-upward'}
+                            size={20}
+                            color="white"
+                        />
+                    </TouchableOpacity>
+                )}
+            </View>
 
-                {attachments.length ? (
-                    <View style={{ paddingHorizontal: 12, paddingBottom: 8, backgroundColor: '#ffffff' }}>
-                        <Text style={{ fontSize: 12, color: '#6b7280' }}>
-                            Đã đính kèm: {attachments.map((a) => a.name).join(', ')}
-                        </Text>
+            {attachments.length ? (
+                <View style={{ paddingHorizontal: 12, paddingBottom: 8, backgroundColor: '#ffffff' }}>
+                    <Text style={{ fontSize: 12, color: '#6b7280' }}>
+                        Đã đính kèm: {attachments.map((a) => a.name).join(', ')}
+                    </Text>
+                </View>
+            ) : null}
+        </Animated.View>
+
+            {/* Model Picker Modal */ }
+    <ModelPickerModal
+        visible={showModelPicker}
+        selectedModel={selectedModel}
+        onSelectModel={setSelectedModel}
+        onClose={() => setShowModelPicker(false)}
+    />
+
+    {/* History Modal */ }
+    <Modal visible={showHistory} animationType="slide" transparent>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' }}>
+            <View style={{ backgroundColor: 'white', borderTopLeftRadius: 16, borderTopRightRadius: 16, maxHeight: '65%' }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 14, borderBottomWidth: 1, borderBottomColor: '#e5e7eb' }}>
+                    <Text style={{ fontSize: 16, fontWeight: '600', color: '#111827' }}>Lịch sử hội thoại</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <TouchableOpacity onPress={loadConversations} disabled={loadingHistory} style={{ marginRight: 12 }}>
+                            {loadingHistory ? (
+                                <ActivityIndicator size="small" color="#2563eb" />
+                            ) : (
+                                <MaterialIcons name="refresh" size={22} color="#374151" />
+                            )}
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={() => setShowHistory(false)}>
+                            <MaterialIcons name="close" size={22} color="#374151" />
+                        </TouchableOpacity>
                     </View>
-                ) : null}
-            </Animated.View>
-
-            {/* Model Picker Modal */}
-            <ModelPickerModal
-                visible={showModelPicker}
-                selectedModel={selectedModel}
-                onSelectModel={setSelectedModel}
-                onClose={() => setShowModelPicker(false)}
-            />
-
-            {/* History Modal */}
-            <Modal visible={showHistory} animationType="slide" transparent>
-                <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' }}>
-                    <View style={{ backgroundColor: 'white', borderTopLeftRadius: 16, borderTopRightRadius: 16, maxHeight: '65%' }}>
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 14, borderBottomWidth: 1, borderBottomColor: '#e5e7eb' }}>
-                            <Text style={{ fontSize: 16, fontWeight: '600', color: '#111827' }}>Lịch sử hội thoại</Text>
-                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                <TouchableOpacity onPress={loadConversations} disabled={loadingHistory} style={{ marginRight: 12 }}>
-                                    {loadingHistory ? (
-                                        <ActivityIndicator size="small" color="#2563eb" />
-                                    ) : (
-                                        <MaterialIcons name="refresh" size={22} color="#374151" />
-                                    )}
+                </View>
+                {loadingHistory ? (
+                    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingVertical: 40 }}>
+                        <ActivityIndicator size="large" color="#2563eb" />
+                        <Text style={{ marginTop: 12, color: '#6b7280', fontSize: 14 }}>Đang tải lịch sử...</Text>
+                    </View>
+                ) : (
+                    <FlatList
+                        data={sortedConversations}
+                        keyExtractor={(item, idx) => item.id || `${idx}`}
+                        renderItem={({ item }) => (
+                            <View
+                                style={{
+                                    paddingHorizontal: 14,
+                                    paddingVertical: 12,
+                                    borderBottomWidth: 1,
+                                    borderBottomColor: '#f3f4f6',
+                                    flexDirection: 'row',
+                                    alignItems: 'center',
+                                    justifyContent: 'space-between',
+                                }}
+                            >
+                                <TouchableOpacity
+                                    onPress={() => handleOpenConversation(item.id)}
+                                    style={{ flex: 1, paddingRight: 8 }}
+                                >
+                                    <Text style={{ fontSize: 14, color: '#111827' }}>
+                                        {removeTriggerTokens(item.title) || item.id || 'Conversation'}
+                                    </Text>
+                                    <Text style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
+                                        {formatVietnamTime(item.updated_at || item.created_at)}
+                                    </Text>
                                 </TouchableOpacity>
-                                <TouchableOpacity onPress={() => setShowHistory(false)}>
-                                    <MaterialIcons name="close" size={22} color="#374151" />
+                                <TouchableOpacity
+                                    onPress={() => deleteConversation(item.id)}
+                                    style={{ padding: 4 }}
+                                >
+                                    <MaterialIcons name="delete-outline" size={20} color="#ef4444" />
                                 </TouchableOpacity>
                             </View>
-                        </View>
-                        {loadingHistory ? (
-                            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingVertical: 40 }}>
-                                <ActivityIndicator size="large" color="#2563eb" />
-                                <Text style={{ marginTop: 12, color: '#6b7280', fontSize: 14 }}>Đang tải lịch sử...</Text>
-                            </View>
-                        ) : (
-                            <FlatList
-                                data={sortedConversations}
-                                keyExtractor={(item, idx) => item.id || `${idx}`}
-                                renderItem={({ item }) => (
-                                    <View
-                                        style={{
-                                            paddingHorizontal: 14,
-                                            paddingVertical: 12,
-                                            borderBottomWidth: 1,
-                                            borderBottomColor: '#f3f4f6',
-                                            flexDirection: 'row',
-                                            alignItems: 'center',
-                                            justifyContent: 'space-between',
-                                        }}
-                                    >
-                                        <TouchableOpacity
-                                            onPress={() => handleOpenConversation(item.id)}
-                                            style={{ flex: 1, paddingRight: 8 }}
-                                        >
-                                            <Text style={{ fontSize: 14, color: '#111827' }}>
-                                                {removeTriggerTokens(item.title) || item.id || 'Conversation'}
-                                            </Text>
-                                            <Text style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
-                                                {formatVietnamTime(item.updated_at || item.created_at)}
-                                            </Text>
-                                        </TouchableOpacity>
-                                        <TouchableOpacity
-                                            onPress={() => deleteConversation(item.id)}
-                                            style={{ padding: 4 }}
-                                        >
-                                            <MaterialIcons name="delete-outline" size={20} color="#ef4444" />
-                                        </TouchableOpacity>
-                                    </View>
-                                )}
-                                ListEmptyComponent={
-                                    <Text style={{ padding: 14, color: '#6b7280' }}>Chưa có hội thoại.</Text>
-                                }
-                            />
                         )}
-                    </View>
-                </View>
-            </Modal>
-        </Modal>
+                        ListEmptyComponent={
+                            <Text style={{ padding: 14, color: '#6b7280' }}>Chưa có hội thoại.</Text>
+                        }
+                    />
+                )}
+            </View>
+        </View>
+    </Modal>
+        </Modal >
     );
 }

@@ -13,6 +13,9 @@
                 "gradleCommand": ":app:assembleRelease"
             },
             "env": {
+                "AGENT_API_URL": "https://agent.next.seinetime.ai",
+                "CORE_API_URL": "https://api.next.seinetime.ai",
+                "VERSION": "1.0.0",
                 "EXPO_PUBLIC_AGENT_API_URL": "https://agent.next.seinetime.ai",
                 "EXPO_PUBLIC_CORE_API_URL": "https://api.next.seinetime.ai",
                 "EXPO_PUBLIC_USE_AGENT_CHAT": "true",

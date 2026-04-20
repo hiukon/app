@@ -16,7 +16,24 @@ export function useChat() {
             // Luôn giữ message của user
             if (msg.isUser) return true;
 
-            // Bỏ qua message có type là tool_call hoặc thinking
+            // ✅ Kiểm tra nếu là message chứa báo cáo - LUÔN HIỂN THỊ
+            if (msg.text) {
+                const lowerText = msg.text.toLowerCase();
+                const isReportMessage =
+                    lowerText.includes('báo cáo') ||
+                    lowerText.includes('tải xuống') ||
+                    lowerText.includes('.doc') ||
+                    lowerText.includes('kết quả') ||
+                    lowerText.includes('phân loại') ||
+                    lowerText.includes('nhiệm vụ') ||
+                    msg.text.length > 300;  // Message dài thường là báo cáo
+
+                if (isReportMessage) {
+                    return true;  // ✅ Luôn hiển thị message báo cáo
+                }
+            }
+
+            // Bỏ qua message có type là tool_call hoặc thinking (trừ khi là báo cáo)
             if (msg.type === 'tool_call' || msg.type === 'thinking' || msg.role === 'activity') {
                 return false;
             }
@@ -31,8 +48,12 @@ export function useChat() {
                     '📢',
                     'tool call',
                     'thinking',
-                    'đang suy nghĩ'
                 ];
+
+                // ✅ KHÔNG lọc "đang suy nghĩ" nếu là message streaming
+                if (msg.status !== 'streaming' && lowerText.includes('đang suy nghĩ')) {
+                    return false;
+                }
 
                 for (const pattern of hidePatterns) {
                     if (lowerText.includes(pattern.toLowerCase())) {
@@ -60,24 +81,39 @@ export function useChat() {
         switch (reason) {
             case 'human_approval':
             case 'database_modification':
-            case 'multi_step_confirm':
+            case 'multi_step_confirm': {
                 const yes = /^(yes|y|approve|đồng ý|dong y|ok|có)$/i.test(value);
-                return { action: yes ? 'approve' : 'reject', answer: value };
+                return {
+                    action: yes ? 'approve' : 'reject',
+                    tool_name: interrupt?.payload?.tool_name
+                };
+            }
 
-            case 'error_recovery':
+            case 'error_recovery': {
                 if (/retry|thử lại/i.test(value)) return { action: 'retry' };
                 if (/skip|bỏ qua/i.test(value)) return { action: 'skip' };
                 if (/abort|hủy|cancel|thoát/i.test(value)) return { action: 'abort' };
                 return { action: 'retry' };
+            }
 
-            case 'upload_required':
-                return { action: 'upload', answer: value };
-
-            case 'information_gathering':
-                return { selected: [], custom: value };
-
-            default:
+            case 'upload_required': {
                 return { answer: value };
+            }
+
+            // ✅ SỬA LẠI CASE NÀY
+            case 'information_gathering': {
+                // Theo tài liệu §9.4: payload có { answer: string }
+                return { answer: value };
+            }
+
+            case 'policy_hold': {
+                return { answer: value };
+            }
+
+            default: {
+                // Fallback - dùng answer
+                return { answer: value };
+            }
         }
     };
 
@@ -148,21 +184,64 @@ export function useChat() {
 
     const answerInterrupt = async (input) => {
         setIsSending(true);
+
+        // ✅ Thêm message chờ qua chatModel
+        const waitingMessage = {
+            text: '⏳ Đang tạo báo cáo, vui lòng đợi (có thể mất 10-15 phút)...',
+            isUser: false,
+            status: 'streaming',
+        };
+
+        // Truy cập chatModel từ chatController
+        const waitingId = chatController.chatModel?.addMessage?.(waitingMessage)?.id;
+        updateFilteredMessages();
+
         try {
+            // ✅ Xóa message chờ trước khi resume
+            if (waitingId) {
+                chatController.chatModel?.removeMessage?.(waitingId);
+                updateFilteredMessages();
+            }
+
             const bump = () => {
-                updateFilteredMessages();  // ✅ DÙNG HÀM MỚI
+                updateFilteredMessages();
                 setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
             };
+
             console.log('[DEBUG] answerInterrupt called with input:', input);
-            // ...
             const intr = chatController.getPendingInterrupt?.() || null;
             console.log('[DEBUG] interrupt from controller:', intr);
+
             const payload = toInterruptPayload(intr, input);
             console.log('[DEBUG] payload to resume:', payload);
+
             const out = await chatController.resumeAgentInterrupt(payload, bump);
-            updateFilteredMessages();  // ✅ DÙNG HÀM MỚI
+
+            updateFilteredMessages();
             setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
             return out;
+
+        } catch (error) {
+            console.error('[ERROR] answerInterrupt failed:', error);
+
+            // Nếu lỗi, cập nhật message chờ thành lỗi (nếu chưa xóa)
+            if (waitingId) {
+                const stillExists = chatController.chatModel?.getMessages?.().find(m => m.id === waitingId);
+                if (stillExists) {
+                    chatController.chatModel?.updateMessage?.(waitingId, {
+                        text: `❌ Có lỗi khi tạo báo cáo: ${error.message}. Vui lòng thử lại.`,
+                        status: 'error',
+                    });
+                } else {
+                    // Nếu đã xóa rồi thì thêm message lỗi mới
+                    chatController.chatModel?.addMessage?.({
+                        text: `❌ Có lỗi khi tạo báo cáo: ${error.message}. Vui lòng thử lại.`,
+                        isUser: false,
+                        status: 'error',
+                    });
+                }
+                updateFilteredMessages();
+            }
         } finally {
             setIsSending(false);
         }
@@ -232,5 +311,6 @@ export function useChat() {
         openConversation,
         deleteConversation,
         newConversation,
+        conversationId: chatController.conversationId,  // ✅ THÊM PROPERTY NÀY
     };
 }

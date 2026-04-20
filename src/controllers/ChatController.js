@@ -192,6 +192,7 @@ class ChatController {
         onSnapshot,
         onBeforeEvent,
         onAfterEvent,
+        customOptions = {},
     }) {
         if (this._streamAbort) this._streamAbort.abort();
         const ac = new AbortController();
@@ -221,6 +222,7 @@ class ChatController {
                     });
                     onAfterEvent?.(ev);
                 },
+                ...customOptions,
             });
         } catch (e) {
             if (e.message === 'Aborted') throw e;
@@ -586,82 +588,227 @@ class ChatController {
             }
 
             case 'RUN_FINISHED':
+                console.log('RUN_FINISHED event:', {
+                    outcome: ev.outcome,
+                    hasInterrupt: !!ev.interrupt,
+                    hasArtifacts: ev.artifacts?.length,
+                    hasCitations: ev.metadata?.citations?.length,
+                    textLength: readEventText(ev).length,
+                    runId: this.runId
+                });
+
                 this._runActive = false;
+
+                // ==================== XỬ LÝ INTERRUPT ====================
                 if (ev.outcome === 'interrupt' && ev.interrupt) {
+                    console.log('interrupt data:', ev.interrupt);
+
+                    // Validate interrupt data
+                    if (!ev.interrupt.question && !ev.interrupt.options) {
+                        console.warn('Interrupt missing question/options:', ev.interrupt);
+                        ev.interrupt.question = 'Vui lòng cung cấp thông tin:';
+                    }
+
                     this.pendingInterrupt = ev.interrupt;
+
                     const q = ev.interrupt.question || 'Cần xác nhận từ bạn.';
                     const opts = ev.interrupt.options?.length
                         ? `\n${ev.interrupt.options.map((o, i) => `${i + 1}. ${o}`).join('\n')}`
                         : '';
+
                     this.chatModel.addMessage({
                         text: `${q}${opts}`,
                         isUser: false,
                         status: 'sent',
                     });
-                } else {
+                }
+                // ==================== XỬ LÝ RUN THÀNH CÔNG ====================
+                else {
                     this.pendingInterrupt = null;
+
+                    // Xử lý message hiện tại
                     if (this._currentAssistantId) {
                         const cur = this.chatModel.getMessages().find((m) => m.id === this._currentAssistantId);
                         const fallbackText = readEventText(ev);
-                        let safeText = `${cur?.text || ''}`.trim() || `${fallbackText || ''}`.trim();
+                        let rawText = `${cur?.text || ''}`.trim() || `${fallbackText || ''}`.trim();
 
-                        // ✅ LỌC: Chỉ lấy đoạn dài nhất (câu trả lời)
-                        const paragraphs = safeText.split(/\n\s*\n/);
-                        let longestPara = '';
-                        for (const para of paragraphs) {
-                            if (para.length > longestPara.length &&
-                                !para.toLowerCase().includes('tìm kiếm') &&
-                                !para.toLowerCase().includes('người dùng')) {
-                                longestPara = para;
+                        // Lọc bỏ log kỹ thuật nhưng giữ nội dung báo cáo
+                        const lines = rawText.split('\n');
+                        const filteredLines = lines.filter(line => {
+                            const lowerLine = line.toLowerCase().trim();
+
+                            // Bỏ qua dòng trống hoàn toàn
+                            if (line.trim().length === 0) return false;
+
+                            // Các pattern cần loại bỏ (log kỹ thuật)
+                            const excludePatterns = [
+                                'tìm kiếm kỹ năng',
+                                'observe the result',
+                                'người dùng muốn biết',
+                                'tìm kiếm thông tin',
+                                'tôi cần tìm kiếm',
+                                'tôi đã tìm kiếm',
+                                'sau khi tìm kiếm',
+                                'tôi sẽ tổng hợp',
+                                'dựa trên kết quả',
+                                'theo hướng dẫn',
+                                'để tôi thử lại',
+                                'tôi đã trả về phản hồi không hợp lệ',
+                                '🔍',
+                                '📢',
+                                'cortex',
+                            ];
+
+                            // Nếu dòng chứa pattern cần loại bỏ -> bỏ qua
+                            if (excludePatterns.some(pattern => lowerLine.includes(pattern))) {
+                                return false;
                             }
+
+                            // Bỏ qua dòng chỉ chứa timestamp
+                            if (lowerLine.match(/^\d{1,2}:\d{2}:\d{2}\s*(am|pm)?$/)) return false;
+                            if (lowerLine.match(/\d{1,2}:\d{2}:\d{2}\s*(am|pm)/i)) return false;
+
+                            // Giữ lại tất cả các dòng khác
+                            return true;
+                        });
+
+                        let safeText = filteredLines.join('\n').trim();
+
+                        // Nếu sau khi lọc không còn gì, giữ lại raw text
+                        if (!safeText && rawText.length > 0) {
+                            safeText = rawText
+                                .replace(/\d{1,2}:\d{2}:\d{2}\s*(AM|PM)/gi, '')
+                                .replace(/\d{1,2}:\d{2}:\d{2}\s*(am|pm)/gi, '')
+                                .trim();
                         }
-                        safeText = longestPara || safeText;
+
+                        // Lấy artifacts từ event
+                        const artifacts = ev.artifacts || [];
+                        const hasArtifacts = artifacts.length > 0;
+
+                        // Lấy citations từ metadata nếu có
+                        const citations = ev.metadata?.citations || [];
+                        const hasCitations = citations.length > 0;
 
                         if (safeText) {
-                            this.chatModel.updateMessage(this._currentAssistantId, {
+                            const updateData = {
                                 status: 'sent',
                                 text: safeText,
-                            });
+                            };
+
+                            // Thêm meta nếu có artifacts hoặc citations
+                            if (hasArtifacts || hasCitations) {
+                                updateData.meta = {};
+                                if (hasArtifacts) {
+                                    updateData.meta.artifacts = artifacts;
+                                }
+                                if (hasCitations) {
+                                    updateData.meta.citations = citations;
+                                }
+                            }
+
+                            this.chatModel.updateMessage(this._currentAssistantId, updateData);
                         } else {
-                            this.chatModel.removeMessage(this._currentAssistantId);
+                            // Nếu không có text nhưng có artifacts, vẫn giữ message
+                            if (hasArtifacts) {
+                                this.chatModel.updateMessage(this._currentAssistantId, {
+                                    status: 'sent',
+                                    text: '📎 Đã nhận được file đính kèm.',
+                                    meta: { artifacts }
+                                });
+                            } else {
+                                this.chatModel.removeMessage(this._currentAssistantId);
+                            }
                         }
                         this._currentAssistantId = null;
                     }
 
-                    const hasAssistantText = this.chatModel.getMessages().some((m) => !m.isUser && `${m.text || ''}`.trim().length > 0);
+                    // Kiểm tra có message assistant nào có text không
+                    const hasAssistantText = this.chatModel.getMessages().some(
+                        (m) => !m.isUser && `${m.text || ''}`.trim().length > 0
+                    );
+
                     if (!hasAssistantText && ev.outcome === 'success') {
-                        this.chatModel.addMessage({
-                            text: 'Run hoàn tất nhưng server không trả TEXT_MESSAGE_CONTENT/TEXT_MESSAGE_END.',
-                            isUser: false,
-                            status: 'error',
-                        });
+                        const hasAnyArtifact = this.chatModel.getMessages().some(
+                            (m) => !m.isUser && m.meta?.artifacts?.length > 0
+                        );
+
+                        if (!hasAnyArtifact) {
+                            this.chatModel.addMessage({
+                                text: 'Run hoàn tất nhưng server không trả về nội dung.',
+                                isUser: false,
+                                status: 'error',
+                            });
+                        }
                     }
+
+                    // ==================== FETCH CITATIONS & ARTIFACTS ====================
                     const token = apiClient.getAuthToken();
                     const last = this.chatModel.getMessages().slice().reverse().find((m) => !m.isUser);
+
                     if (token && this.runId && last) {
-                        AgentApiService.fetchCitations(token, this.runId)
-                            .then((resp) => {
-                                const cites = resp?.data?.citations || resp?.data || [];
-                                const now = this.chatModel.getMessages();
-                                const cur = now.find((m) => m.id === last.id);
-                                if (!cur) return;
-                                const curMeta = cur.meta || {};
-                                this.chatModel.updateMessage(last.id, {
-                                    meta: { ...curMeta, citations: Array.isArray(cites) ? cites : [] },
+                        const hasExistingCitations = last.meta?.citations?.length > 0;
+                        const hasExistingArtifacts = last.meta?.artifacts?.length > 0;
+
+                        // Fetch artifacts nếu chưa có
+                        if (!hasExistingArtifacts) {
+                            AgentApiService.fetchArtifacts(token, this.runId)
+                                .then((resp) => {
+                                    console.log('📦 Artifacts response:', resp);
+                                    const artifacts = resp?.data?.artifacts || resp?.data || [];
+                                    if (artifacts.length > 0) {
+                                        const now = this.chatModel.getMessages();
+                                        const cur = now.find((m) => m.id === last.id);
+                                        if (cur) {
+                                            const curMeta = cur.meta || {};
+                                            this.chatModel.updateMessage(last.id, {
+                                                meta: {
+                                                    ...curMeta,
+                                                    artifacts: artifacts.map(art => ({
+                                                        ...art,
+                                                        url: art.url || art.signed_url || null
+                                                    }))
+                                                }
+                                            });
+                                            onMessagesUpdate?.();
+                                        }
+                                    }
+                                })
+                                .catch((error) => {
+                                    console.error('Failed to fetch artifacts:', error);
                                 });
-                                onMessagesUpdate?.();
-                            })
-                            .catch(() => { });
+                        }
+
+                        // Fetch citations nếu chưa có
+                        if (!hasExistingCitations) {
+                            AgentApiService.fetchCitations(token, this.runId)
+                                .then((resp) => {
+                                    const cites = resp?.data?.citations || resp?.data || [];
+                                    const now = this.chatModel.getMessages();
+                                    const cur = now.find((m) => m.id === last.id);
+                                    if (!cur) return;
+                                    const curMeta = cur.meta || {};
+                                    this.chatModel.updateMessage(last.id, {
+                                        meta: { ...curMeta, citations: Array.isArray(cites) ? cites : [] },
+                                    });
+                                    onMessagesUpdate?.();
+                                })
+                                .catch((error) => {
+                                    console.error('Failed to fetch citations:', error);
+                                });
+                        }
                     }
+
                     this._saveConversationToCache();
                 }
+
                 this._cleanupEmptyStreamingAssistants();
                 onMessagesUpdate?.();
                 break;
-
             case 'RUN_ERROR':
             case 'ERROR': {
                 const errText = ev.result || ev.text || ev.data?.message || 'Đã xảy ra lỗi.';
+                console.log('❌ SERVER ERROR EVENT:', JSON.stringify(ev, null, 2));
                 this._runActive = false;
                 this._currentAssistantId = null;
                 this._cleanupEmptyStreamingAssistants();
@@ -669,6 +816,32 @@ class ChatController {
                     text: errText,
                     isUser: false,
                     status: 'error',
+                });
+                onMessagesUpdate?.();
+                break;
+            }
+            case 'HITL_INTERRUPT_MESSAGE': {
+                console.log('HITL_INTERRUPT_MESSAGE:', JSON.stringify(ev, null, 2));
+
+                // Lấy interrupt data từ event
+                const interruptData = ev.interrupt || ev.data || {
+                    id: ev.interrupt_id,
+                    run_id: ev.run_id,
+                    question: ev.text || ev.data?.text || 'Cần xác nhận từ bạn.',
+                    options: ev.options || ev.data?.options || [],
+                    reason: ev.reason || 'information_gathering',
+                };
+
+                this.pendingInterrupt = interruptData;
+
+                const q = interruptData.question || 'Cần xác nhận từ bạn.';
+                const opts = interruptData.options?.length
+                    ? `\n${interruptData.options.map((o, i) => `${i + 1}. ${o}`).join('\n')}`
+                    : '';
+                this.chatModel.addMessage({
+                    text: `${q}${opts}`,
+                    isUser: false,
+                    status: 'sent',
                 });
                 onMessagesUpdate?.();
                 break;
@@ -810,6 +983,10 @@ class ChatController {
     }
 
     async resumeAgentInterrupt(resumePayload, onMessagesUpdate) {
+        console.log('🔁 RESUME PAYLOAD:', JSON.stringify(resumePayload));
+        console.log('🔁 CONVERSATION ID:', this.conversationId);
+        console.log('🔁 RUN ID:', this.runId);
+        console.log('🔁 INTERRUPT ID:', this.pendingInterrupt?.id);
         if (!USE_AGENT_CHAT) return { messages: this.chatModel.getMessages() };
         const intr = this.pendingInterrupt;
         if (!intr || !this.conversationId || !this.runId) {
@@ -843,18 +1020,42 @@ class ChatController {
         };
         const epoch = this._bumpEpoch();
 
+        // ✅ Thêm message chờ
+        const waitingId = this.chatModel.addMessage({
+            text: '⏳ Đang tạo báo cáo, vui lòng đợi (có thể mất 10-15 phút)...',
+            isUser: false,
+            status: 'streaming',
+        });
+        onMessagesUpdate?.();
+
         try {
+            // Xóa message chờ trước khi stream
+            this.chatModel.removeMessage(waitingId);
+            onMessagesUpdate?.();
+
+            // ✅ TRUYỀN TIMEOUT 15 PHÚT
             await this._streamAgent({
                 epoch,
                 token,
                 body,
                 onMessagesUpdate,
                 allowReconnect: true,
+                customOptions: {
+                    timeout: 900000,  // 15 phút
+                },
             });
+
+            console.log('🔁 RESUME payload:', JSON.stringify(resumePayload));
         } catch (e) {
+            // Xóa message chờ nếu chưa xóa
+            const stillExists = this.chatModel.getMessages().find(m => m.id === waitingId);
+            if (stillExists) {
+                this.chatModel.removeMessage(waitingId);
+            }
+
             if (e.message !== 'Aborted') {
                 this.chatModel.addMessage({
-                    text: `Xin lỗi, ${e.message}`,
+                    text: `❌ Có lỗi khi tạo báo cáo: ${e.message}. Vui lòng thử lại sau.`,
                     isUser: false,
                     status: 'error',
                 });

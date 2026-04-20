@@ -1,184 +1,177 @@
 import { useCallback, useRef, useState, useEffect } from 'react';
 import { Platform, Alert } from 'react-native';
+import {
+    ExpoSpeechRecognitionModule,
+    ExpoSpeechRecognitionModuleEmitter,
+} from 'expo-speech-recognition';
 
-/**
- * No top-level import of expo-speech-recognition (requireNativeModule throws on Expo Go).
- * Lazy require in try/catch when mic starts; web uses SpeechRecognition.
- */
-function tryRequireSpeechModule() {
-    try {
-        return require('expo-speech-recognition').ExpoSpeechRecognitionModule;
-    } catch {
-        return null;
-    }
-}
-
-/**
- * Mic only: web = SpeechRecognition API; native = expo-speech-recognition (dev build after prebuild).
- * No speaker/TTS.
- */
 export function useVoiceChat({ onTranscript }) {
     const [isListening, setIsListening] = useState(false);
     const webRecRef = useRef(null);
     const subsRef = useRef([]);
+    const autoStopTimerRef = useRef(null);
 
-    const clearNativeSubs = useCallback(() => {
-        subsRef.current.forEach((s) => {
-            try {
-                s.remove?.();
-            } catch (_) {
-                /* ignore */
-            }
+    // ==================== CLEANUP ====================
+
+    const cleanup = useCallback(() => {
+        if (autoStopTimerRef.current) {
+            clearTimeout(autoStopTimerRef.current);
+            autoStopTimerRef.current = null;
+        }
+        subsRef.current.forEach(s => {
+            try { s?.remove?.(); } catch (_) { }
         });
         subsRef.current = [];
     }, []);
 
-    useEffect(
-        () => () => {
-            clearNativeSubs();
-            if (Platform.OS === 'web' && typeof window !== 'undefined') {
-                try {
-                    webRecRef.current?.stop?.();
-                } catch (_) {
-                    /* ignore */
-                }
-            }
-        },
-        [clearNativeSubs]
-    );
+    useEffect(() => () => cleanup(), [cleanup]);
+
+    // ==================== STOP ====================
 
     const stopListening = useCallback(() => {
-        if (Platform.OS === 'web' && typeof window !== 'undefined') {
-            try {
-                webRecRef.current?.stop?.();
-            } catch (_) {
-                /* ignore */
-            }
+        console.log('⏹️ Stopping...');
+        cleanup();
+
+        if (Platform.OS === 'web') {
+            try { webRecRef.current?.stop?.(); } catch (_) { }
             webRecRef.current = null;
             setIsListening(false);
             return;
         }
-        clearNativeSubs();
-        const mod = tryRequireSpeechModule();
-        if (mod) {
-            try {
-                mod.stop();
-            } catch (_) {
-                try {
-                    mod.abort();
-                } catch (_) {
-                    /* ignore */
-                }
-            }
+
+        try {
+            ExpoSpeechRecognitionModule.stop();
+        } catch (err) {
+            console.error('❌ stop() error:', err);
+            try { ExpoSpeechRecognitionModule.abort(); } catch (_) { }
         }
         setIsListening(false);
-    }, [clearNativeSubs]);
+    }, [cleanup]);
+
+    // ==================== START ====================
 
     const startListening = useCallback(async () => {
+        console.log('🎤 Starting...');
+
+        // ===== WEB =====
         if (Platform.OS === 'web' && typeof window !== 'undefined') {
             const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-            if (!SR) {
-                Alert.alert(
-                    'Mic',
-                    'Trinh duyet khong ho tro SpeechRecognition.'
-                );
-                return;
-            }
-            try {
-                webRecRef.current?.stop?.();
-            } catch (_) {
-                /* ignore */
-            }
+            if (!SR) { Alert.alert('Lỗi', 'Trình duyệt không hỗ trợ.'); return; }
+            try { webRecRef.current?.stop?.(); } catch (_) { }
+
             const rec = new SR();
             rec.lang = 'vi-VN';
-            rec.interimResults = true;
+            rec.interimResults = false; // ✅ Chỉ final results
             rec.continuous = false;
-            rec.onresult = (event) => {
-                let interim = '';
-                let finalChunk = '';
-                for (let i = event.resultIndex; i < event.results.length; i += 1) {
-                    const piece = event.results[i][0]?.transcript || '';
-                    if (event.results[i].isFinal) finalChunk += piece;
-                    else interim += piece;
+            rec.onresult = (e) => {
+                let text = '';
+                for (let i = e.resultIndex; i < e.results.length; i++) {
+                    if (e.results[i].isFinal) text += e.results[i][0]?.transcript || '';
                 }
-                const chunk = `${finalChunk || interim}`.trim();
-                if (chunk) onTranscript?.(chunk, { partial: !finalChunk });
+                text = text.trim();
+                if (text) onTranscript?.(text);
             };
-            rec.onerror = () => {
-                setIsListening(false);
-            };
-            rec.onend = () => {
-                setIsListening(false);
-                webRecRef.current = null;
-            };
+            rec.onerror = () => setIsListening(false);
+            rec.onend = () => { setIsListening(false); webRecRef.current = null; };
             webRecRef.current = rec;
             rec.start();
             setIsListening(true);
             return;
         }
 
-        const mod = tryRequireSpeechModule();
-        if (!mod) {
-            Alert.alert(
-                'Nhan giong noi',
-                'Expo Go khong co ExpoSpeechRecognition. Dung mic tren web, hoac: npx expo prebuild roi npx expo run:android / run:ios (development build).'
-            );
-            return;
-        }
-
-        clearNativeSubs();
-
-        const subResult = mod.addListener('result', (ev) => {
-            const first = ev.results?.[0];
-            const t = `${first?.transcript || ''}`.trim();
-            if (!t) return;
-            onTranscript?.(t, { partial: !ev.isFinal });
-            if (ev.isFinal) setIsListening(false);
-        });
-        const subError = mod.addListener('error', (e) => {
-            setIsListening(false);
-            clearNativeSubs();
-            if (e.error !== 'aborted' && e.error !== 'no-speech') {
-                Alert.alert(
-                    'Nhận giọng nói',
-                    e.message || e.error || 'Loi khong xac dinh'
-                );
-            }
-        });
-        const subEnd = mod.addListener('end', () => {
-            setIsListening(false);
-            clearNativeSubs();
-        });
-
-        subsRef.current = [subResult, subError, subEnd];
+        // ===== NATIVE =====
+        cleanup();
 
         try {
-            const perm = await mod.requestPermissionsAsync();
-            if (!perm.granted) {
-                clearNativeSubs();
-                Alert.alert('Cần quyền microphone và nhận dạng giọng nói.');
+            // ✅ Dùng đúng ExpoSpeechRecognitionModuleEmitter
+            const resultSub = ExpoSpeechRecognitionModuleEmitter.addListener('result', (event) => {
+                console.log('🎯 result:', JSON.stringify(event));
+                try {
+                    let text = '';
+                    if (Array.isArray(event?.results)) {
+                        text = event.results[0]?.[0]?.transcript ?? '';
+                    } else if (Array.isArray(event?.value)) {
+                        text = event.value[0] ?? '';
+                    } else {
+                        text = event?.transcript ?? event?.text ?? '';
+                    }
+                    text = String(text).trim();
+                    console.log(`📝 "${text}"`);
+                    if (text) onTranscript?.(text);
+                } catch (err) {
+                    console.error('❌ result error:', err);
+                }
+            });
+
+            const errorSub = ExpoSpeechRecognitionModuleEmitter.addListener('error', (event) => {
+                console.error('❌ error:', JSON.stringify(event));
+                const code = event?.error ?? event?.message ?? '';
+                if (code === 'no-speech') return;
+                cleanup();
+                setIsListening(false);
+                if (!['aborted', 'abort'].includes(code)) {
+                    Alert.alert('Lỗi nhận dạng', code);
+                }
+            });
+
+            const endSub = ExpoSpeechRecognitionModuleEmitter.addListener('end', () => {
+                console.log('🔚 end');
+                cleanup();
+                setIsListening(false);
+            });
+
+            subsRef.current = [resultSub, errorSub, endSub];
+            console.log('✅ Listeners registered via ExpoSpeechRecognitionModuleEmitter');
+
+        } catch (err) {
+            console.error('❌ addListener error:', err);
+        }
+
+        // Request permissions + start
+        try {
+            console.log('📋 Checking permissions...');
+            const { granted } = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+            console.log(`✅ Permission granted: ${granted}`);
+
+            if (!granted) {
+                Alert.alert('Yêu cầu quyền', 'Cần cấp quyền microphone.');
+                cleanup();
                 return;
             }
-            mod.start({
+
+            console.log('🚀 Calling start()...');
+            const startConfig = {
                 lang: 'vi-VN',
-                interimResults: true,
-            });
+                interimResults: false, // ✅ Chỉ final results
+                continuous: false,
+                maxResults: 1,
+            };
+            console.log('📝 Start config:', JSON.stringify(startConfig));
+
+            await ExpoSpeechRecognitionModule.start(startConfig);
+
             setIsListening(true);
+            console.log('✅ Started - speak now!');
+
+            autoStopTimerRef.current = setTimeout(() => {
+                console.log('⏰ Auto-stop 15s');
+                try { ExpoSpeechRecognitionModule.stop(); } catch (_) { }
+            }, 15000);
+
         } catch (err) {
-            clearNativeSubs();
-            Alert.alert('Giọng nói', err?.message || String(err));
+            console.error('❌ start error:', err);
+            console.error('❌ Error message:', err?.message);
+            console.error('❌ Error code:', err?.code);
+            cleanup();
+            setIsListening(false);
+            Alert.alert('Lỗi khởi động Voice', err?.message || 'Không thể khởi động nhận dạng giọng nói.');
         }
-    }, [onTranscript, clearNativeSubs]);
+    }, [onTranscript, cleanup]);
 
     const toggleListening = useCallback(() => {
         if (isListening) stopListening();
         else startListening();
     }, [isListening, startListening, stopListening]);
 
-    return {
-        isListening,
-        startListening,
-        stopListening,
-        toggleListening,
-    };
+    return { isListening, startListening, stopListening, toggleListening };
 }

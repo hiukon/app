@@ -7,6 +7,7 @@ import {
     RefreshControl,
     TouchableOpacity,
 } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import { MaterialIcons } from '@expo/vector-icons';
 import StatController from '../../controllers/StatController';
 import { useResponsive } from '../../hooks/useResponsive';
@@ -14,6 +15,7 @@ import Header from '../components/common/Header';
 import CarouselSlide from '../components/common/CarouselSlide';
 import StatCard from '../components/statistics/StatCard';
 import LoadingSpinner from '../components/common/LoadingSpinner';
+import LoginAlertModal from '../components/common/LoginAlertModal';
 import { TASK_UNITS, ASSIGN_TASK_UNITS } from '../../config/api.config';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -28,6 +30,7 @@ function monthLabel(d) {
 }
 
 export default function HomeScreen() {
+    const navigation = useNavigation();
     const { user, isLoading: authLoading } = useAuth();
     const [stats, setStats] = useState(() =>
         TASK_UNITS.map((name, i) => ({
@@ -61,6 +64,7 @@ export default function HomeScreen() {
     );
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
+    const [loginModalVisible, setLoginModalVisible] = useState(false);
     const [selectedMonth, setSelectedMonth] = useState(() => new Date());
     const [selectedMonthAssign, setSelectedMonthAssign] = useState(() => new Date());
     const { scale, isTablet, isSmall, isLandscape, width } = useResponsive();
@@ -86,7 +90,7 @@ export default function HomeScreen() {
             setLoading(true);
             const monthKey = monthKeyFromDate(selectedMonth);
             const statRes = await StatController.loadStatistics({ monthKey });
-            
+
             const fallbackStats = TASK_UNITS.map((name, i) => ({
                 id: String(i + 1),
                 name,
@@ -100,7 +104,7 @@ export default function HomeScreen() {
                 status: 'normal',
                 color: '#2563eb',
             }));
-            
+
             if (statRes.success && Array.isArray(statRes.data) && statRes.data.length > 0) {
                 setStats(statRes.data);
             } else {
@@ -116,7 +120,7 @@ export default function HomeScreen() {
         try {
             const monthKey = monthKeyFromDate(selectedMonthAssign);
             const assignRes = await StatController.loadAssignTasks({ monthKey });
-            
+
             const fallbackAssign = ASSIGN_TASK_UNITS.map((name, i) => ({
                 id: `a_${i + 1}`,
                 name,
@@ -130,7 +134,12 @@ export default function HomeScreen() {
                 status: 'normal',
                 color: '#10b981',
             }));
-            
+
+            // ✅ Kiểm tra lỗi Missing access token
+            if (!assignRes.success && assignRes.error && assignRes.error.includes('Missing access token')) {
+                setLoginModalVisible(true);
+            }
+
             if (assignRes.success && Array.isArray(assignRes.data) && assignRes.data.length > 0) {
                 const withColors = assignRes.data.map(item => ({
                     ...item,
@@ -152,7 +161,7 @@ export default function HomeScreen() {
             const monthKey = monthKeyFromDate(selectedMonth);
             const statRes = await StatController.loadStatistics({ monthKey });
             const assignRes = await StatController.loadAssignTasks({ monthKey });
-            
+
             const fallbackStats = TASK_UNITS.map((name, i) => ({
                 id: String(i + 1),
                 name,
@@ -166,7 +175,7 @@ export default function HomeScreen() {
                 status: 'normal',
                 color: '#2563eb',
             }));
-            
+
             const fallbackAssign = TASK_UNITS.map((name, i) => ({
                 id: String(i + 1),
                 name,
@@ -180,14 +189,23 @@ export default function HomeScreen() {
                 status: 'normal',
                 color: '#10b981',
             }));
-            
+
+            // ✅ Kiểm tra lỗi Missing access token
+            if (!statRes.success && statRes.error && statRes.error.includes('Missing access token')) {
+                setLoginModalVisible(true);
+            }
+
+            if (!assignRes.success && assignRes.error && assignRes.error.includes('Missing access token')) {
+                setLoginModalVisible(true);
+            }
+
             // Always keep mission boxes visible: failure OR empty success -> fallback boxes.
             if (statRes.success && Array.isArray(statRes.data) && statRes.data.length > 0) {
                 setStats(statRes.data);
             } else {
                 setStats(fallbackStats);
             }
-            
+
             if (assignRes.success && Array.isArray(assignRes.data) && assignRes.data.length > 0) {
                 setAssignTasks(assignRes.data);
             } else {
@@ -239,7 +257,7 @@ export default function HomeScreen() {
                         marginBottom: scale(16),
                         backgroundColor: '#ffffff',
                         borderRadius: scale(10),
-                        paddingVertical: scale(10), 
+                        paddingVertical: scale(10),
                         paddingHorizontal: scale(12),
                         shadowColor: '#000',
                         shadowOffset: { width: 0, height: 1 },
@@ -304,7 +322,7 @@ export default function HomeScreen() {
                         marginBottom: scale(16),
                         backgroundColor: '#ffffff',
                         borderRadius: scale(10),
-                        paddingVertical: scale(10), 
+                        paddingVertical: scale(10),
                         paddingHorizontal: scale(12),
                         shadowColor: '#000',
                         shadowOffset: { width: 0, height: 1 },
@@ -343,25 +361,33 @@ export default function HomeScreen() {
                         </View>
 
                         <View style={{
-                        flexDirection: 'row',
-                        flexWrap: 'wrap',
-                        justifyContent: 'flex-start',
-                        columnGap: statGap,
-                        rowGap: statGap,
-                    }}>
-                        {assignTasks.map((item) => (
-                            <StatCard
-                                key={item.id}
-                                data={item}
-                                cardWidth={statCardWidth}
-                                compact={statColumns >= 3}
-                            />
-                        ))}
-                    </View>
+                            flexDirection: 'row',
+                            flexWrap: 'wrap',
+                            justifyContent: 'flex-start',
+                            columnGap: statGap,
+                            rowGap: statGap,
+                        }}>
+                            {assignTasks.map((item) => (
+                                <StatCard
+                                    key={item.id}
+                                    data={item}
+                                    cardWidth={statCardWidth}
+                                    compact={statColumns >= 3}
+                                />
+                            ))}
+                        </View>
                     </View>
                 </View>
-                
+
             </ScrollView>
+            <LoginAlertModal
+                visible={loginModalVisible}
+                onClose={() => setLoginModalVisible(false)}
+                onLogin={() => {
+                    setLoginModalVisible(false);
+                    navigation.navigate('Tài khoản');
+                }}
+            />
         </SafeAreaView>
     );
 }

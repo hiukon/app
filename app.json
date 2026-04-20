@@ -14,7 +14,11 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.hanobrain.app"
+      "bundleIdentifier": "com.hanobrain.app",
+      "infoPlist": {
+        "NSSpeechRecognitionUsageDescription": "Allow HaNoiBrain to recognize your speech",
+        "NSMicrophoneUsageDescription": "Allow HaNoiBrain to access your microphone for voice input"
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -22,6 +26,8 @@
       },
       "package": "com.hanobrain.app",
       "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.INTERNET",
         "android.permission.DETECT_SCREEN_CAPTURE"
       ]
     },
@@ -29,7 +35,7 @@
     "extra": {
       "API_URL": "https://api.hanobrain.vn",
       "eas": {
-        "projectId": "c4cf9090-66f0-48af-bfe0-5fd8a17978a2"
+        "projectId": "7a4eafe1-3070-449a-a8a7-a373c0d4568a"
       }
     },
     "plugins": [

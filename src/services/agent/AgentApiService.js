@@ -6,6 +6,61 @@ class AgentApiService {
         return (AGENT_API_URL || '').replace(/\/$/, '');
     }
 
+    // Thêm vào cuối class AgentApiService, trước dòng "export default"
+
+    // ✅ THÊM METHOD NÀY
+    async fetchArtifacts(token, runId) {
+        const url = `${this.baseUrl()}/api/v1/run/${runId}/artifacts`;
+
+        try {
+            const response = await fetch(url, {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                }
+            });
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`HTTP ${response.status}: ${errorText}`);
+            }
+
+            const data = await response.json();
+            console.log('📦 Fetched artifacts:', data);
+            return data;
+        } catch (error) {
+            console.error('fetchArtifacts error:', error);
+            throw error;
+        }
+    }
+
+    // ✅ THÊM METHOD NÀY (nếu server yêu cầu signed URL)
+    async getArtifactSignedUrl(token, conversationId, artifactId) {
+        const url = `${this.baseUrl()}/api/v1/conversation/${conversationId}/artifact/${artifactId}/signed-url`;
+
+        try {
+            const response = await fetch(url, {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                }
+            });
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`HTTP ${response.status}: ${errorText}`);
+            }
+
+            return await response.json();
+        } catch (error) {
+            console.error('getArtifactSignedUrl error:', error);
+            throw error;
+        }
+    }
     async listConversations(token, query = {}) {
         const qs = Object.entries(query)
             .filter(([, v]) => v !== undefined && v !== null && v !== '')

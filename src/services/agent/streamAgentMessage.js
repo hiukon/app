@@ -1,15 +1,6 @@
 import { createSseParser } from './sseParser';
+import { API_CONFIG } from '../../config/api.config';
 
-/**
- * POST /api/v1/messages with Accept: text/event-stream; parse SSE via XHR (React Native friendly).
- * @param {object} options
- * @param {string} options.url - Full URL e.g. AGENT_API_URL + /api/v1/messages
- * @param {string} options.token - Bearer access token
- * @param {object} options.body - CreateMessageRequest JSON
- * @param {AbortSignal} [options.signal]
- * @param {(event: object) => void} options.onEvent
- * @param {() => void} [options.onComplete]
- */
 export function streamAgentMessage({
     url,
     token,
@@ -17,6 +8,7 @@ export function streamAgentMessage({
     signal,
     onEvent,
     onComplete,
+    timeout = API_CONFIG.reportGenerationTimeout,  // ✅ Thêm timeout mặc định 15 phút
 }) {
     return new Promise((resolve, reject) => {
         const xhr = new XMLHttpRequest();
@@ -24,19 +16,32 @@ export function streamAgentMessage({
         let processed = 0;
         let settled = false;
         let aborted = false;
+        let timeoutId = null;  // ✅ Thêm timeout ID
 
         const finish = (err) => {
             if (settled) return;
             settled = true;
+            if (timeoutId) clearTimeout(timeoutId);  // ✅ Clear timeout
             if (err) reject(err);
             else resolve();
         };
 
         const onAbort = () => {
             aborted = true;
+            if (timeoutId) clearTimeout(timeoutId);
             xhr.abort();
             finish(new Error('Aborted'));
         };
+
+        // ✅ Set timeout cho toàn bộ request
+        if (timeout > 0) {
+            timeoutId = setTimeout(() => {
+                if (!settled) {
+                    onAbort();
+                    finish(new Error('Request timeout - Yêu cầu mất quá nhiều thời gian (15 phút)'));
+                }
+            }, timeout);
+        }
 
         if (signal) {
             if (signal.aborted) {
@@ -51,6 +56,13 @@ export function streamAgentMessage({
         xhr.setRequestHeader('Accept', 'text/event-stream');
         xhr.setRequestHeader('Authorization', `Bearer ${token}`);
 
+        // ✅ Thêm timeout cho XHR (network timeout)
+        xhr.timeout = timeout;
+        xhr.ontimeout = () => {
+            onAbort();
+            finish(new Error('Network timeout'));
+        };
+
         xhr.onprogress = () => {
             const full = xhr.responseText || '';
             const chunk = full.slice(processed);
@@ -61,6 +73,8 @@ export function streamAgentMessage({
 
         xhr.onload = () => {
             if (signal) signal.removeEventListener('abort', onAbort);
+            if (timeoutId) clearTimeout(timeoutId);  // ✅ Clear timeout
+
             const full = xhr.responseText || '';
             const chunk = full.slice(processed);
             processed = full.length;
@@ -94,6 +108,7 @@ export function streamAgentMessage({
 
         xhr.onerror = () => {
             if (signal) signal.removeEventListener('abort', onAbort);
+            if (timeoutId) clearTimeout(timeoutId);  // ✅ Clear timeout
             if (aborted) return;
             const err = new Error(`Network request failed: ${url}`);
             err.status = xhr.status || 0;

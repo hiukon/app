@@ -9,12 +9,15 @@ import {
     SafeAreaView,
     ImageBackground,
     Image,
+    ActivityIndicator,
+    RefreshControl,
+    ScrollView
 } from 'react-native';
 import { PanGestureHandler, State } from 'react-native-gesture-handler';
 import Animated, { useSharedValue, useAnimatedStyle, withSpring, withTiming } from 'react-native-reanimated';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useChat } from '../../../hooks/useChat';
-import { useVoiceChat } from '../../../hooks/useVoiceChat';
+import Voice from '@react-native-voice/voice';
 import { useResponsive } from '../../../hooks/useResponsive';
 import { useAuth } from '../../../contexts/AuthContext';
 import * as DocumentPicker from 'expo-document-picker';
@@ -29,9 +32,14 @@ import botBubbleBg from '../../../assets/images/TUHN3.jpg';
 import { LinearGradient } from 'expo-linear-gradient';
 import chatIcon from '../../../assets/images/chatbot.png';
 import Markdown from 'react-native-markdown-display';
+import * as Speech from 'expo-speech';
+import { Linking, Alert } from 'react-native';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
+import { PermissionsAndroid, Platform } from 'react-native';
+import { Audio } from 'expo-av';
 
-
-// ==================== HÀM TIỆN ÍCH ====================
+// ==================== UTILITIES ====================
 
 // Chuyển đổi token server → hiển thị
 const convertTokensToDisplayWithMap = (text, domainIdToCodeMap) => {
@@ -41,7 +49,6 @@ const convertTokensToDisplayWithMap = (text, domainIdToCodeMap) => {
 
     // Xử lý skill token: </:visualize> → /visualize
     converted = converted.replace(/<\/([^>]+)>/g, (match, code) => {
-        // Loại bỏ dấu : ở đầu nếu có
         const cleanCode = code.replace(/^:/, '');
         return `/${cleanCode}`;
     });
@@ -58,54 +65,64 @@ const convertTokensToDisplayWithMap = (text, domainIdToCodeMap) => {
     return converted;
 };
 
-// Làm sạch Markdown
-
-const cleanMarkdownText = (text) => {
-    if (!text) return '';
-    return text
-        .replace(/\*\*(.*?)\*\*/g, '$1')
-        .replace(/\*(.*?)\*/g, '$1')
-        .replace(/__(.*?)__/g, '$1')
-        .replace(/`(.*?)`/g, '$1')
-        .replace(/~~(.*?)~~/g, '$1')
-        .replace(/^[-*•]\s+/gm, '• ')
-        .replace(/^\d+\.\s+/gm, '▪️ ')
-        .replace(/\n{3,}/g, '\n\n')
-        .replace(/[ \t]+/g, ' ')
-        .trim();
-};
-
 // Lọc lỗi kỹ thuật
 const sanitizeTechnicalText = (text) => {
     if (!text) return '';
     const patterns = [/syntaxerror/i, /traceback/i, /exception/i, /http\s*\d{3}/i];
     return patterns.some(p => p.test(text)) ? 'Đã có lỗi xảy ra. Vui lòng thử lại.' : text;
 };
+
+// Làm sạch text từ bot
 const cleanBotText = (text) => {
     if (!text) return null;
+    const lowerText = text.toLowerCase();
+
+    // ✅ Kiểm tra nếu đây là message chứa báo cáo
+    const isReportMessage =
+        lowerText.includes('báo cáo') ||
+        lowerText.includes('tải xuống') ||
+        lowerText.includes('.doc') ||
+        lowerText.includes('kết quả') ||
+        text.length > 500;
+
+    if (isReportMessage) {
+        // Chỉ xóa timestamp, giữ nguyên toàn bộ nội dung
+        let cleaned = text
+            .replace(/\d{1,2}:\d{2}:\d{2}\s*(AM|PM)/gi, '')
+            .replace(/\d{1,2}:\d{2}:\d{2}\s*(am|pm)/gi, '')
+            .trim();
+
+        return cleaned.length > 0 ? cleaned : text;
+    }
 
     const lines = text.split('\n');
     const filteredLines = lines.filter(line => {
         const lowerLine = line.toLowerCase().trim();
         if (line.trim().length < 10) return false;
 
-        // Các pattern cần loại bỏ (bổ sung thêm)
-        if (lowerLine.includes('tôi đã trả về phản hồi không hợp lệ')) return false;
-        if (lowerLine.includes('để tôi thử lại')) return false;
-        if (lowerLine.includes('tìm kiếm báo cáo')) return false;
-        if (lowerLine.includes('tìm kiếm thông tin')) return false;
-        if (lowerLine.includes('người dùng muốn biết')) return false;
-        if (lowerLine.includes('tìm kiếm kỹ năng')) return false;
-        if (lowerLine.includes('observe the result')) return false;
-        if (lowerLine.includes('dựa trên kết quả')) return false;
-        if (lowerLine.includes('theo hướng dẫn')) return false;
-        if (lowerLine.includes('tôi sẽ tổng hợp')) return false;
-        if (lowerLine.includes('tôi cần tìm kiếm')) return false;
-        if (lowerLine.includes('tôi đã tìm kiếm')) return false;
-        if (lowerLine.includes('sau khi tìm kiếm')) return false;
-        if (lowerLine.includes('cortex')) return false;
+        // Các pattern cần loại bỏ
+        const excludePatterns = [
+            'tôi đã trả về phản hồi không hợp lệ',
+            'để tôi thử lại',
+            'tìm kiếm báo cáo',
+            'tìm kiếm thông tin',
+            'người dùng muốn biết',
+            'tìm kiếm kỹ năng',
+            'observe the result',
+            'dựa trên kết quả',
+            'theo hướng dẫn',
+            'tôi sẽ tổng hợp',
+            'tôi cần tìm kiếm',
+            'tôi đã tìm kiếm',
+            'sau khi tìm kiếm',
+            'tìm thấy kỹ năng',
+            'kích hoạt kỹ năng',
+            'cortex',
+        ];
 
-        // Lọc các dòng chỉ chứa timestamp (ví dụ "8:47:43 AM")
+        if (excludePatterns.some(pattern => lowerLine.includes(pattern))) return false;
+
+        // Lọc timestamp
         if (lowerLine.match(/^\d{1,2}:\d{2}:\d{2}\s*(am|pm)?$/)) return false;
         if (lowerLine.match(/\d{1,2}:\d{2}:\d{2}\s*(am|pm)/i)) return false;
 
@@ -115,12 +132,10 @@ const cleanBotText = (text) => {
     let cleaned = filteredLines.join('\n').trim();
 
     if (cleaned) {
-        // Lấy đoạn cuối cùng (kết quả)
         const paragraphs = cleaned.split(/\n\s*\n/);
         cleaned = paragraphs[paragraphs.length - 1];
     }
 
-    // Xóa timestamp còn sót
     cleaned = cleaned?.replace(/\d{1,2}:\d{2}:\d{2}\s*(AM|PM)/gi, '');
     cleaned = cleaned?.replace(/\d{1,2}:\d{2}:\d{2}\s*(am|pm)/gi, '');
 
@@ -134,16 +149,306 @@ const cleanBotText = (text) => {
 // Escape regex
 const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-// ==================== COMPONENT TIN NHẮN ====================
+// ==================== HISTORY UTILS ====================
+
+// Kiểm tra xem text có phải command hay không (bắt đầu bằng / hoặc @)
+const isCommandText = (text) => {
+    if (!text) return false;
+    const trimmed = text.trim();
+    return trimmed.startsWith('/') || trimmed.startsWith('@') || trimmed.includes('</:') || trimmed.includes('<@:');
+};
+
+// Rút gọn text đến 1-2 dòng với dấu ...
+const truncateHistoryText = (text, maxLines = 2, maxChars = 100) => {
+    if (!text) return '';
+
+    const lines = text.split('\n').filter(line => line.trim().length > 0);
+
+    // Lấy số dòng cần thiết
+    let truncated = lines.slice(0, maxLines).join('\n');
+
+    // Nếu vượt quá ký tự, cắt bớt và thêm ...
+    if (truncated.length > maxChars) {
+        truncated = truncated.substring(0, maxChars).trim() + '...';
+    } else if (lines.length > maxLines) {
+        // Nếu có nhiều dòng hơn maxLines, thêm ...
+        truncated = truncated + '...';
+    }
+
+    return truncated;
+};
+
+const ArtifactItem = memo(({ artifact }) => {
+    const [showPreview, setShowPreview] = useState(false);
+    const [mdContent, setMdContent] = useState('');
+    const [isDownloading, setIsDownloading] = useState(false);
+    const [downloadProgress, setDownloadProgress] = useState(0);
+    const [fileUrl, setFileUrl] = useState(null); // ✅ THÊM STATE
+
+    const fileName = artifact.name || 'Tải xuống';
+    const isDoc = /\\.docx?$/.test(fileName);
+    const isMarkdown = fileName.endsWith('.md');
+    const isTextFile = isMarkdown || /\\.(txt|json)$/.test(fileName);
+    let iconName = 'insert-drive-file';
+    let iconColor = '#2563eb';
+    let bgColor = '#f3f4f6';
+
+    if (isDoc) {
+        iconName = 'description';
+        iconColor = '#2b5797';
+        bgColor = '#e6f0fa';
+    } else if (isMarkdown) {
+        iconName = 'code';
+        iconColor = '#d97706';
+        bgColor = '#fef3c7';
+    }
+
+    useEffect(() => {
+        const getFileUrl = async () => {
+            if (artifact.url) {
+                // Nếu đã có URL
+                if (artifact.url.startsWith('http')) {
+                    setFileUrl(artifact.url);
+                } else {
+                    // Thêm base URL nếu là relative path
+                    const baseUrl = AgentApiService.baseUrl();
+                    setFileUrl(`${baseUrl}${artifact.url.startsWith('/') ? '' : '/'}${artifact.url}`);
+                }
+            } else if (artifact.id) {
+                // Nếu chỉ có ID, cần lấy signed URL
+                try {
+                    const token = apiClient.getAuthToken();
+                    const conversationId = artifact.conversation_id;
+                    if (conversationId) {
+                        const result = await AgentApiService.getArtifactSignedUrl(token, conversationId, artifact.id);
+                        if (result.data?.url) {
+                            setFileUrl(result.data.url);
+                        }
+                    }
+                } catch (error) {
+                    console.error('Failed to get signed URL:', error);
+                }
+            }
+        };
+
+        getFileUrl();
+    }, [artifact.url, artifact.id]);
+
+    const handlePreview = async () => {
+        if (!fileUrl) {
+            Alert.alert('Thông báo', 'URL file không hợp lệ');
+            return;
+        }
+
+        try {
+            const token = apiClient.getAuthToken();
+
+            if (isMarkdown) {
+                const response = await fetch(fileUrl, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const text = await response.text();
+                setMdContent(text);
+                setShowPreview(true);
+            } else if (isDoc) {
+                Alert.alert(
+                    'Xem tài liệu',
+                    'File Word sẽ được tải xuống để xem. Bạn có muốn tiếp tục?',
+                    [
+                        { text: 'Hủy', style: 'cancel' },
+                        { text: 'Tải xuống', onPress: handleDownload }
+                    ]
+                );
+            } else {
+                Alert.alert('Thông báo', 'Không thể xem trước loại file này');
+            }
+        } catch (error) {
+            Alert.alert('Lỗi', 'Không thể tải nội dung file: ' + error.message);
+        }
+    };
+
+    const handleDownload = async () => {
+        if (!fileUrl) {
+            Alert.alert('Thông báo', 'URL file không hợp lệ');
+            return;
+        }
+
+        setIsDownloading(true);
+        setDownloadProgress(0);
+
+        try {
+            const token = apiClient.getAuthToken();
+
+            let fileExt = '';
+            if (isDoc) {
+                fileExt = fileName.endsWith('.docx') ? '.docx' : '.doc';
+            } else if (isMarkdown) {
+                fileExt = '.md';
+            } else {
+                const lastDot = fileName.lastIndexOf('.');
+                fileExt = lastDot > -1 ? fileName.substring(lastDot) : '';
+            }
+
+            const baseFileName = fileName.replace(/\.[^/.]+$/, '');
+            const fullFileName = baseFileName + fileExt;
+            const fileUri = FileSystem.documentDirectory + fullFileName;
+
+            const downloadResumable = FileSystem.createDownloadResumable(
+                fileUrl,
+                fileUri,
+                {
+                    headers: { 'Authorization': `Bearer ${token}` },
+                },
+                (downloadProgress) => {
+                    const progress = downloadProgress.totalBytesWritten / downloadProgress.totalBytesExpectedToWrite;
+                    setDownloadProgress(progress);
+                }
+            );
+
+            const result = await downloadResumable.downloadAsync();
+
+            if (result && result.uri) {
+                const fileInfo = await FileSystem.getInfoAsync(result.uri);
+                if (!fileInfo.exists) {
+                    throw new Error('File not found after download');
+                }
+
+                const canShare = await Sharing.isAvailableAsync();
+                if (canShare) {
+                    let mimeType = undefined;
+                    if (isDoc) {
+                        mimeType = fileName.endsWith('.docx')
+                            ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                            : 'application/msword';
+                    } else if (isMarkdown) {
+                        mimeType = 'text/markdown';
+                    }
+
+                    await Sharing.shareAsync(result.uri, {
+                        mimeType: mimeType,
+                        dialogTitle: `Chia sẻ ${fullFileName}`,
+                    });
+                } else {
+                    Alert.alert(
+                        'Tải xuống thành công',
+                        `File đã được lưu tại: ${result.uri}`,
+                        [{ text: 'OK' }]
+                    );
+                }
+            } else {
+                throw new Error('Download failed - no file');
+            }
+        } catch (error) {
+            Alert.alert('Lỗi tải file', error.message);
+        } finally {
+            setIsDownloading(false);
+            setDownloadProgress(0);
+        }
+    };
+
+    return (
+        <View>
+            <View style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+
+                padding: 12,
+                borderRadius: 10,
+                marginBottom: 8,
+                borderWidth: 1,
+                borderColor: isDoc ? '#b8d4f0' : (isMarkdown ? '#fde68a' : '#e5e7eb'),
+            }}>
+                <MaterialIcons name={iconName} size={22} color={iconColor} />
+                <View style={{ marginLeft: 10, flex: 1 }}>
+                    <Text style={{ color: '#111827', fontWeight: '500', fontSize: 14 }}>
+                        {fileName}
+                    </Text>
+                </View>
+
+                {isTextFile && (
+                    <TouchableOpacity
+                        onPress={handlePreview}
+                        style={{ padding: 6, marginRight: 4 }}
+                        disabled={!fileUrl}
+                    >
+                        <MaterialIcons
+                            name="visibility"
+                            size={20}
+                            color={fileUrl ? '#6b7280' : '#d1d5db'}
+                        />
+                    </TouchableOpacity>
+                )}
+
+                <TouchableOpacity
+                    onPress={handleDownload}
+                    style={{ padding: 6 }}
+                    disabled={isDownloading || !fileUrl}
+                >
+                    {isDownloading ? (
+                        <ActivityIndicator size="small" color={iconColor} />
+                    ) : (
+                        <MaterialIcons
+                            name="download"
+                            size={20}
+                            color={fileUrl ? '#6b7280' : '#d1d5db'}
+                        />
+                    )}
+                </TouchableOpacity>
+            </View>
+
+            {/* Preview Modal */}
+            {showPreview && isMarkdown && (
+                <Modal
+                    visible={showPreview}
+                    animationType="slide"
+                    onRequestClose={() => setShowPreview(false)}
+                >
+                    <SafeAreaView style={{ flex: 1, backgroundColor: 'white' }}>
+                        <View style={{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            padding: 16,
+                            borderBottomWidth: 1,
+                            borderBottomColor: '#e5e7eb',
+                        }}>
+                            <Text style={{ fontSize: 16, fontWeight: '600', flex: 1 }}>
+                                {fileName}
+                            </Text>
+                            <TouchableOpacity onPress={() => setShowPreview(false)}>
+                                <MaterialIcons name="close" size={24} color="#374151" />
+                            </TouchableOpacity>
+                        </View>
+                        <ScrollView style={{ flex: 1, padding: 16 }}>
+                            <Markdown
+                                style={{
+                                    body: { color: '#1f2937', fontSize: 14, lineHeight: 22 },
+                                    code_block: { backgroundColor: '#f3f4f6', padding: 12, borderRadius: 8 },
+                                }}
+                            >
+                                {mdContent}
+                            </Markdown>
+                        </ScrollView>
+                    </SafeAreaView>
+                </Modal>
+            )}
+        </View>
+    );
+});
+// ==================== MESSAGE COMPONENT ====================
 
 const MessageItem = memo(({
     item,
     onLongPressUserMessage,
     formatTimestamp,
     thinkingDots,
-    domainIdToCodeMap
+    domainIdToCodeMap,
+    onSpeak,
+    isSpeaking,
+    onStopSpeaking,
 }) => {
     const isUser = item.isUser;
+    const isStreaming = !isUser && item.status === 'streaming';
+
 
     let displayText = '';
     if (isUser) {
@@ -155,12 +460,8 @@ const MessageItem = memo(({
 
         let cleaned = cleanBotText(rawText);
         if (cleaned === null) {
-            if (item.status !== 'streaming') {
-                // Không hiển thị tin nhắn này
-                return null;
-            } else {
-                cleaned = rawText;
-            }
+            if (item.status !== 'streaming') return null;
+            cleaned = rawText;
         }
 
         cleaned = sanitizeTechnicalText(cleaned);
@@ -169,16 +470,39 @@ const MessageItem = memo(({
         }
         cleaned = removeTriggerTokens(cleaned);
         displayText = convertTokensToDisplayWithMap(cleaned, domainIdToCodeMap);
+        displayText = displayText
+            .split('\n')
+            .map(line => line.trimStart())  // Xóa khoảng trắng đầu dòng
+            .join('\n')
+            // Thêm dòng trống trước các bullet list (dấu - hoặc *)
+            .replace(/([^\n])\n([-*]\s)/g, '$1\n\n$2')
+            // Thêm dòng trống trước các numbered list
+            .replace(/([^\n])\n(\d+\.\s)/g, '$1\n\n$2')
+            // Thêm dòng trống trước heading
+            .replace(/([^\n])\n(#{1,6}\s)/g, '$1\n\n$2')
+            // Thêm dòng trống trước bold text đứng riêng 1 dòng (như **Phân loại...:**)
+            .replace(/([^\n])\n(\*\*[^*]+\*\*[:\s])/g, '$1\n\n$2')
+            // Chuẩn hóa dòng trống (tối đa 2)
+            .replace(/\n{3,}/g, '\n\n');
 
-        if (!displayText.trim()) {
-            return null;
-        }
+        if (!displayText.trim()) return null;
     }
 
     const handleLongPress = () => {
         if (!isUser) return;
         onLongPressUserMessage(item.id, convertTokensToDisplayWithMap(item.text || '', domainIdToCodeMap));
     };
+
+    const handleSpeak = () => {
+        if (isSpeaking === item.id) {
+            onStopSpeaking?.();
+        } else {
+            onSpeak?.(displayText, item.id);
+        }
+    };
+
+    const isThisSpeaking = isSpeaking === item.id;
+
 
     return (
         <TouchableOpacity
@@ -189,7 +513,8 @@ const MessageItem = memo(({
                 justifyContent: isUser ? 'flex-end' : 'flex-start',
                 marginBottom: 12,
                 paddingHorizontal: 10,
-            }}>
+            }}
+        >
             <View style={{
                 alignItems: isUser ? 'flex-end' : 'flex-start',
                 maxWidth: '85%',
@@ -213,71 +538,188 @@ const MessageItem = memo(({
                         borderBottomRightRadius: isUser ? 4 : 17,
                     }}>
                         {isUser ? (
-                            // User message: plain text
-                            <Text style={{
-                                color: 'white',
-                                fontSize: 14,
-                                lineHeight: 20,
-                            }}>
+                            <Text style={{ color: 'white', fontSize: 14, lineHeight: 20 }}>
                                 {displayText}
                             </Text>
                         ) : (
-                            // AI message: render markdown
-                            <Markdown
-                                style={{
-                                    body: {
-                                        color: '#1f2937',
-                                        fontSize: 14,
-                                        lineHeight: 20,
-                                    },
-                                    strong: {
-                                        fontWeight: 'bold',
-                                        color: '#1f2937',
-                                    },
-                                    em: {
+                            <View>
+                                <Markdown
+                                    style={{
+                                        body: {
+                                            color: '#1f2937',
+                                            fontSize: 14,
+                                            lineHeight: 22,
+                                        },
+                                        paragraph: {
+                                            marginBottom: 10,
+                                            marginTop: 4,
+                                            marginLeft: 0,
+                                            paddingLeft: 0,
+                                            paddingRight: 8,
+                                            lineHeight: 22,
+                                        },
+
+                                        // ✅ STRONG (in đậm) - Dùng cho các tiêu đề nhỏ
+                                        strong: {
+                                            fontWeight: '700',
+                                            color: '#111827',
+                                        },
+                                        bullet_list: {
+                                            marginBottom: 12,
+                                            marginTop: 6,
+                                            marginLeft: 0,
+                                            paddingLeft: 0,
+                                        },
+                                        bullet_list_item: {
+                                            flexDirection: 'row',
+                                            alignItems: 'flex-start',
+                                            marginBottom: 6,
+                                            marginLeft: 0,
+                                            paddingLeft: 0,
+                                        },
+                                        bullet_list_icon: {
+                                            marginRight: 8,
+                                            marginTop: 2,
+                                            fontSize: 16,
+                                            color: '#2563eb',
+                                            width: 16,
+                                            textAlign: 'center',
+                                        },
+                                        bullet_list_content: {
+                                            flex: 1,
+                                            marginLeft: 0,
+                                            paddingLeft: 0,
+                                            paddingRight: 8,
+                                        },
+
+                                        ordered_list: {
+                                            marginBottom: 12,
+                                            marginTop: 6,
+                                            marginLeft: 0,
+                                            paddingLeft: 0,
+                                        },
+                                        ordered_list_item: {
+                                            flexDirection: 'row',
+                                            alignItems: 'flex-start',
+                                            marginBottom: 8,
+                                            marginLeft: 0,
+                                            paddingLeft: 0,
+                                        },
+                                        ordered_list_icon: {
+                                            marginRight: 8,
+                                            minWidth: 22,
+                                            marginTop: 2,
+                                            fontSize: 14,
+                                            fontWeight: '600',
+                                            color: '#2563eb',
+                                        },
+                                        ordered_list_content: {
+                                            flex: 1,
+                                            marginLeft: 0,
+                                            paddingLeft: 0,
+                                            paddingRight: 8,
+                                        },
+
+                                        heading1: {
+                                            fontSize: 20,
+                                            fontWeight: 'bold',
+                                            marginTop: 20,
+                                            marginBottom: 12,
+                                            marginLeft: 0,
+                                            paddingLeft: 0,
+                                            paddingBottom: 6,
+                                            color: '#111827',
+                                            borderBottomWidth: 1,
+                                            borderBottomColor: '#e5e7eb',
+                                        },
+                                        heading2: {
+                                            fontSize: 18,
+                                            fontWeight: 'bold',
+                                            marginTop: 16,
+                                            marginBottom: 10,
+                                            marginLeft: 0,
+                                            paddingLeft: 0,
+                                            color: '#1f2937',
+                                        },
+                                        heading3: {
+                                            fontSize: 16,
+                                            fontWeight: '600',
+                                            marginTop: 14,
+                                            marginBottom: 8,
+                                            marginLeft: 0,
+                                            paddingLeft: 0,
+                                            color: '#374151',
+                                        },
+
+                                        text: {
+                                            color: '#1f2937',
+                                            fontSize: 14,
+                                            lineHeight: 22,
+                                        },
+                                        link: {
+                                            color: '#2563eb',
+                                            textDecorationLine: 'underline',
+                                        },
+
+                                        blockquote: {
+                                            borderLeftWidth: 4,
+                                            borderLeftColor: '#2563eb',
+                                            paddingLeft: 16,
+                                            paddingVertical: 8,
+                                            marginVertical: 12,
+                                            marginLeft: 0,
+                                            backgroundColor: '#f8fafc',
+                                            borderRadius: 8,
+                                        },
+                                    }}
+                                    mergeStyle={false}
+                                >
+                                    {displayText}
+                                </Markdown>
+                                {isStreaming && (
+                                    <Text style={{
+                                        fontSize: 12,
+                                        color: '#6b7280',
                                         fontStyle: 'italic',
-                                    },
-                                    bullet_list: {
-                                        marginBottom: 4,
-                                    },
-                                    bullet_list_item: {
-                                        flexDirection: 'row',
-                                        marginBottom: 2,
-                                    },
-                                    ordered_list: {
-                                        marginBottom: 4,
-                                    },
-                                    ordered_list_item: {
-                                        flexDirection: 'row',
-                                        marginBottom: 2,
-                                    },
-                                    paragraph: {
-                                        marginBottom: 4,
-                                    },
-                                    heading1: {
-                                        fontSize: 20,
-                                        fontWeight: 'bold',
-                                        marginVertical: 6,
-                                    },
-                                    heading2: {
-                                        fontSize: 18,
-                                        fontWeight: 'bold',
-                                        marginVertical: 5,
-                                    },
-                                    heading3: {
-                                        fontSize: 16,
-                                        fontWeight: 'bold',
-                                        marginVertical: 4,
-                                    },
-                                    link: {
-                                        color: '#2563eb',
-                                    },
-                                }}
-                                // Tùy chọn: cho phép line break từ \n
-                                mergeStyle={false}
-                            >
-                                {displayText}
-                            </Markdown>
+                                        marginTop: 8,
+                                    }}>
+                                    </Text>
+                                )}
+                                {!isUser && item.meta?.artifacts && item.meta.artifacts.length > 0 && (
+                                    <View style={{ marginTop: 12 }}>
+                                        <Text style={{ fontSize: 13, fontWeight: '600', color: '#374151', marginBottom: 8 }}>
+                                            📎 Tệp đính kèm ({item.meta.artifacts.length}):
+                                        </Text>
+                                        {item.meta.artifacts.map((artifact, idx) => (
+                                            <ArtifactItem key={idx} artifact={artifact} />
+                                        ))}
+                                    </View>
+                                )}
+                                {!isStreaming && (
+                                    <TouchableOpacity
+                                        onPress={handleSpeak}
+                                        style={{
+                                            flexDirection: 'row',
+                                            alignItems: 'center',
+                                            marginTop: 8,
+                                            alignSelf: 'flex-start',
+                                        }}
+                                    >
+                                        <MaterialIcons
+                                            name={isThisSpeaking ? 'volume-up' : 'volume-off'}
+                                            size={16}
+                                            color={isThisSpeaking ? '#2563eb' : '#9ca3af'}
+                                        />
+                                        <Text style={{
+                                            fontSize: 11,
+                                            color: isThisSpeaking ? '#2563eb' : '#9ca3af',
+                                            marginLeft: 4,
+                                        }}>
+                                            {isThisSpeaking ? 'Đang đọc...' : 'Đọc'}
+                                        </Text>
+                                    </TouchableOpacity>
+                                )}
+                            </View>
                         )}
                         <Text style={{
                             fontSize: 10,
@@ -304,18 +746,58 @@ const MessageItem = memo(({
         </TouchableOpacity>
     );
 });
-// ==================== COMPONENT CHÍNH ====================
+
+// ==================== SKELETON COMPONENT ====================
+
+const SkeletonHistoryItem = () => (
+    <View style={{
+        paddingHorizontal: 14,
+        paddingVertical: 12,
+        borderBottomWidth: 1,
+        borderBottomColor: '#f3f4f6',
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+    }}>
+        <View style={{ flex: 1 }}>
+            <View style={{
+                height: 16,
+                backgroundColor: '#e5e7eb',
+                borderRadius: 4,
+                width: '70%',
+                marginBottom: 8,
+            }} />
+            <View style={{
+                height: 12,
+                backgroundColor: '#f3f4f6',
+                borderRadius: 4,
+                width: '40%',
+            }} />
+        </View>
+        <View style={{
+            width: 20,
+            height: 20,
+            backgroundColor: '#fee2e2',
+            borderRadius: 4,
+        }} />
+    </View>
+);
+
+// ==================== MAIN COMPONENT ====================
 
 export default function DraggableChatBubble() {
     const { user } = useAuth();
     const partnerId = user?.partner_id || '01km7vpjm4hcq4jbj35m680m5p';
-
+    const [interruptAnswer, setInterruptAnswer] = useState('');
     // Animation shared values
     const translateX = useSharedValue(0);
     const translateY = useSharedValue(0);
     const offsetX = useSharedValue(0);
     const offsetY = useSharedValue(0);
-    const micScale = useSharedValue(1);
+
+    // Text-to-Speech state
+    const [speakingMessageId, setSpeakingMessageId] = useState(null);
+    const [speechEnabled, setSpeechEnabled] = useState(true);
 
     // UI state
     const [modalVisible, setModalVisible] = useState(false);
@@ -328,17 +810,29 @@ export default function DraggableChatBubble() {
     const [editingMessageId, setEditingMessageId] = useState(null);
     const [showHistory, setShowHistory] = useState(false);
     const [cursorPosition, setCursorPosition] = useState(0);
+    const [loadingHistory, setLoadingHistory] = useState(false);
+    const [refreshing, setRefreshing] = useState(false);
 
+
+    const [isListening, setIsListening] = useState(false);
+
+    const [audioLevel, setAudioLevel] = useState(0);
+    const recordingRef = useRef(null);
+    const meterIntervalRef = useRef(null);
+    const [hasVoiceResult, setHasVoiceResult] = useState(false);
+
+    const micScale = useSharedValue(1);
+    const ringScale = useSharedValue(1);
     // Suggestion state
     const [showSuggestion, setShowSuggestion] = useState(false);
-    const [suggestionType, setSuggestionType] = useState(null); // 'skill', 'domain'
+    const [suggestionType, setSuggestionType] = useState(null);
     const [suggestionData, setSuggestionData] = useState([]);
     const [loadingSuggestions, setLoadingSuggestions] = useState(false);
-    const [selectedSuggestions, setSelectedSuggestions] = useState({}); // displayKey → serverToken
+    const [selectedSuggestions, setSelectedSuggestions] = useState({});
 
     // Domain mapping
-    const [domainIdToCodeMap, setDomainIdToCodeMap] = useState({}); // id → code_name
-    const [domainCodeToIdMap, setDomainCodeToIdMap] = useState({}); // code_name → id
+    const [domainIdToCodeMap, setDomainIdToCodeMap] = useState({});
+    const [domainCodeToIdMap, setDomainCodeToIdMap] = useState({});
 
     const flatListRef = useRef(null);
     const { scale } = useResponsive();
@@ -359,32 +853,221 @@ export default function DraggableChatBubble() {
         newConversation,
     } = useChat();
 
-    // Voice hook
-    const { isListening, startListening, stopListening } = useVoiceChat({
-        onTranscript: (text) => setInputText(text),
-    });
+    // TEXT-TO-SPEECH
+    const speakMessage = useCallback((text, messageId) => {
+        if (!speechEnabled) return;
+        if (speakingMessageId) {
+            Speech.stop();
+        }
+        const cleanText = text
+            .replace(/\*\*(.*?)\*\*/g, '$1')
+            .replace(/\*(.*?)\*/g, '$1')
+            .replace(/`(.*?)`/g, '$1')
+            .replace(/\[.*?\]\(.*?\)/g, '')
+            .replace(/<[^>]+>/g, '')
+            .trim();
+        if (!cleanText) return;
 
-    // Mic animation style
+        Speech.speak(cleanText, {
+            language: 'vi-VN',
+            pitch: 1.0,
+            rate: 0.9,
+            onStart: () => setSpeakingMessageId(messageId),
+            onDone: () => setSpeakingMessageId(null),
+            onError: (error) => {
+                setSpeakingMessageId(null);
+            },
+        });
+    }, [speechEnabled, speakingMessageId]);
+
+    const stopSpeaking = useCallback(() => {
+        try {
+            Speech.stop();
+        } catch (error) {
+            // Ignore speech stop errors
+        }
+        setSpeakingMessageId(null);
+    }, []);
+
+    // VOICE RECOGNITION
+
+
+    const handleVoiceTranscript = useCallback((text) => {
+        if (!text || !text.trim()) return;
+        setInputText(prev => {
+            const trimmedPrev = prev.trim();
+            if (trimmedPrev.length === 0) return text;
+            return prev + (prev.endsWith(' ') ? '' : ' ') + text;
+        });
+    }, []);
+
+    // Voice event listeners - ĐÃ SỬA
+    useEffect(() => {
+        const onSpeechStart = () => {
+            setIsListening(true);
+            setHasVoiceResult(false);
+        };
+
+        const onSpeechEnd = () => {
+            setIsListening(false);
+        };
+
+        // BỎ onSpeechPartialResults để tránh lặp text
+        // Chỉ giữ onSpeechResults cho kết quả cuối cùng
+        const onSpeechResults = (event) => {
+            if (event.value && event.value.length > 0) {
+                const spokenText = event.value[0];
+                setHasVoiceResult(true);
+                if (spokenText && spokenText.trim()) {
+                    handleVoiceTranscript(spokenText);
+                }
+            }
+        };
+
+        const onSpeechError = (error) => {
+            setIsListening(false);
+
+            if (hasVoiceResult) return;
+
+            const silentErrorCodes = [
+                '7', 'no-speech', '5', 'no-match',
+                '2', '6', 'audio-error'
+            ];
+
+            const errorCode = error?.error?.code?.toString();
+            if (silentErrorCodes.includes(errorCode)) return;
+
+            Alert.alert('Lỗi nhận dạng giọng nói', error?.error?.message || 'Vui lòng thử lại');
+        };
+
+        Voice.onSpeechStart = onSpeechStart;
+        Voice.onSpeechEnd = onSpeechEnd;
+        Voice.onSpeechResults = onSpeechResults; // Chỉ lấy kết quả cuối
+        Voice.onSpeechError = onSpeechError;
+
+        return () => {
+            Voice.removeAllListeners(); // Remove listeners trước
+            Voice.destroy().catch(() => { }); // Destroy sau
+        };
+    }, [handleVoiceTranscript, hasVoiceResult]);
+
+    const startListening = async () => {
+        try {
+            // Request permission cho Android
+            if (Platform.OS === 'android') {
+                const granted = await PermissionsAndroid.request(
+                    PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+                    {
+                        title: 'Microphone Permission',
+                        message: 'This app needs access to your microphone to recognize speech',
+                        buttonNeutral: 'Ask Me Later',
+                        buttonNegative: 'Cancel',
+                        buttonPositive: 'OK',
+                    }
+                );
+
+                if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+                    Alert.alert('Permission Denied', 'Microphone permission is required');
+                    return;
+                }
+
+                // Kiểm tra speech recognition có sẵn không
+            }
+
+            // Request permission cho iOS
+            if (Platform.OS === 'ios') {
+                const { status } = await Audio.requestPermissionsAsync();
+                if (status !== 'granted') {
+                    Alert.alert('Permission Denied', 'Microphone permission is required');
+                    return;
+                }
+            }
+
+            setHasVoiceResult(false);
+            await Voice.start('vi-VN');
+            setIsListening(true);
+        } catch (error) {
+            console.error('Voice start error:', error);
+            setIsListening(false);
+
+            // Hiển thị lỗi thân thiện
+            if (error.code === 'E_NO_RECOGNIZER') {
+                Alert.alert('Error', 'Speech recognition not supported');
+            }
+        }
+    };
+
+    const stopListening = async () => {
+        try {
+            await Voice.stop();
+            setIsListening(false);
+        } catch (error) {
+            console.error('Voice stop error:', error);
+            setIsListening(false); // Vẫn set false dù lỗi
+        }
+    };
+
+    // ANIMATIONS - ĐÃ SỬA
     const ringStyle = useAnimatedStyle(() => ({
-        transform: [{ scale: withSpring(isListening ? 1.3 : 1) }],
-        opacity: withTiming(isListening ? 0.5 : 0),
+        transform: [{
+            scale: withSpring(isListening ? 1.3 : 1, {
+                damping: 2,
+                stiffness: 100
+            })
+        }],
+        opacity: withTiming(isListening ? 0.5 : 0, {
+            duration: 200
+        }),
     }));
 
+    // Tạo hiệu ứng beat khi đang nói
     useEffect(() => {
+        let beatInterval;
+
         if (isListening) {
-            micScale.value = withSpring(1.2, { damping: 2, stiffness: 80 });
+            // Tạo hiệu ứng beat liên tục
+            beatInterval = setInterval(() => {
+                if (isListening) {
+                    // Phóng to
+                    micScale.value = withSpring(1.2, {
+                        damping: 2,
+                        stiffness: 150
+                    });
+
+                    // Thu nhỏ lại
+                    setTimeout(() => {
+                        if (isListening) {
+                            micScale.value = withSpring(1, {
+                                damping: 2,
+                                stiffness: 150
+                            });
+                        }
+                    }, 150);
+                }
+            }, 400); // Beat mỗi 0.4 giây
         } else {
             micScale.value = withSpring(1);
         }
-    }, [isListening]);
 
-    // Format timestamp
+        return () => {
+            if (beatInterval) clearInterval(beatInterval);
+        };
+    }, [isListening, micScale]);
+
+    const animatedMicStyle = useAnimatedStyle(() => ({
+        transform: [{ scale: micScale.value }],
+    }));
+
+    const animatedStyle = useAnimatedStyle(() => ({
+        transform: [{ translateX: translateX.value }, { translateY: translateY.value }],
+    }));
+
+    // FORMATTERS
     const formatTimestamp = useCallback((value) => {
         const date = value instanceof Date ? value : new Date(value);
         return Number.isNaN(date.getTime()) ? '' : date.toLocaleTimeString();
     }, []);
 
-    // Format Vietnam time
     const formatVietnamTime = (dateString) => {
         if (!dateString) return '';
         try {
@@ -401,14 +1084,46 @@ export default function DraggableChatBubble() {
         }
     };
 
-    // Sort conversations
+    // HISTORY FUNCTIONS
     const sortedConversations = [...conversations].sort((a, b) =>
         `${b?.updated_at || b?.created_at || ''}`.localeCompare(
             `${a?.updated_at || a?.created_at || ''}`
         )
     );
 
-    // Load skills
+    const openHistory = async () => {
+        setShowHistory(true);
+        await loadHistoryData();
+    };
+
+    const loadHistoryData = async () => {
+        setLoadingHistory(true);
+        try {
+            await loadConversations();
+            await loadDomains();
+        } catch (error) {
+            console.error('Load history error:', error);
+        } finally {
+            setLoadingHistory(false);
+            setRefreshing(false);
+        }
+    };
+
+    const onRefresh = async () => {
+        setRefreshing(true);
+        await loadHistoryData();
+    };
+
+    const getDisplayTitle = (title) => {
+        if (!title) return 'Cuộc trò chuyện';
+        let display = convertTokensToDisplayWithMap(title, domainIdToCodeMap);
+        if (domainCodeToIdMap[display]) {
+            display = `@${display}`;
+        }
+        return display;
+    };
+
+    // SUGGESTION FUNCTIONS
     const loadSkills = async (search = '') => {
         setLoadingSuggestions(true);
         try {
@@ -433,7 +1148,6 @@ export default function DraggableChatBubble() {
         }
     };
 
-    // Load domains and build mappings
     const loadDomains = async (search = '') => {
         setLoadingSuggestions(true);
         try {
@@ -443,7 +1157,6 @@ export default function DraggableChatBubble() {
                 partner_id: partnerId
             });
             if (result.code === 200 && result.data) {
-                // Build mappings
                 const idToCode = {};
                 const codeToId = {};
                 result.data.forEach(domain => {
@@ -469,59 +1182,7 @@ export default function DraggableChatBubble() {
         }
     };
 
-    // Xử lý chọn suggestion (THEO ĐÚNG TRIGGER TOKEN FORMAT)
-    const handleSelectSuggestion = (item) => {
-        if (!suggestionType) return;
-
-        const triggerChar = suggestionType === 'skill' ? '/' : '@';
-        const lastIndex = inputText.lastIndexOf(triggerChar, cursorPosition);
-
-        if (lastIndex === -1) {
-            setShowSuggestion(false);
-            setSuggestionType(null);
-            return;
-        }
-
-        let displayText = '';
-        let displayKey = '';
-        let serverToken = '';
-
-        if (suggestionType === 'skill') {
-            // Hiển thị: /code_name
-            // Server: </:code_name>
-            displayText = `/${item.code_name} `;
-            displayKey = `/${item.code_name}`;
-            serverToken = `</:${item.code_name}>`;
-        } else if (suggestionType === 'domain') {
-            // Hiển thị: @code_name
-            // Server: <@:domain=ID>
-            const domainId = domainCodeToIdMap[item.code_name];
-            if (!domainId) {
-                console.error('Domain ID not found for:', item.code_name);
-                return;
-            }
-            displayText = `@${item.code_name} `;
-            displayKey = `@${item.code_name}`;
-            serverToken = `<@:domain=${domainId}>`;
-        } else {
-            setShowSuggestion(false);
-            setSuggestionType(null);
-            return;
-        }
-
-        const newText = inputText.substring(0, lastIndex) + displayText + inputText.substring(cursorPosition);
-        setInputText(newText);
-
-        setSelectedSuggestions(prev => ({
-            ...prev,
-            [displayKey]: serverToken
-        }));
-
-        setShowSuggestion(false);
-        setSuggestionType(null);
-    };
-
-    // Xử lý khi text thay đổi (bắt trigger / và @)
+    // HANDLERS
     const handleTextChange = (text) => {
         setInputText(text);
         const cursorPos = text.length;
@@ -541,12 +1202,10 @@ export default function DraggableChatBubble() {
             return;
         }
 
-        // Lấy trigger gần con trỏ nhất
         const active = triggers.reduce((prev, curr) => curr.index > prev.index ? curr : prev);
         const activeIndex = active.index;
         const activeToken = active.type;
 
-        // Kiểm tra trigger có hợp lệ (đứng sau khoảng trắng hoặc đầu dòng)
         const isValidTrigger = (index) => {
             if (index === 0) return true;
             const before = text[index - 1];
@@ -573,16 +1232,53 @@ export default function DraggableChatBubble() {
                 loadDomains();
                 setShowSuggestion(true);
             }
-        } else if (showSuggestion && suggestionType === 'skill' && activeToken !== '/') {
-            setShowSuggestion(false);
-            setSuggestionType(null);
-        } else if (showSuggestion && suggestionType === 'domain' && activeToken !== '@') {
-            setShowSuggestion(false);
-            setSuggestionType(null);
         }
     };
 
-    // Gửi tin nhắn (chuyển đổi display → server token)
+    const handleSelectSuggestion = (item) => {
+        if (!suggestionType) return;
+
+        const triggerChar = suggestionType === 'skill' ? '/' : '@';
+        const lastIndex = inputText.lastIndexOf(triggerChar, cursorPosition);
+
+        if (lastIndex === -1) {
+            setShowSuggestion(false);
+            setSuggestionType(null);
+            return;
+        }
+
+        let displayText = '';
+        let displayKey = '';
+        let serverToken = '';
+
+        if (suggestionType === 'skill') {
+            displayText = `/${item.code_name} `;
+            displayKey = `/${item.code_name}`;
+            serverToken = `</:${item.code_name}>`;
+        } else if (suggestionType === 'domain') {
+            const domainId = domainCodeToIdMap[item.code_name];
+            if (!domainId) return;
+            displayText = `@${item.code_name} `;
+            displayKey = `@${item.code_name}`;
+            serverToken = `<@:domain=${domainId}>`;
+        } else {
+            setShowSuggestion(false);
+            setSuggestionType(null);
+            return;
+        }
+
+        const newText = inputText.substring(0, lastIndex) + displayText + inputText.substring(cursorPosition);
+        setInputText(newText);
+
+        setSelectedSuggestions(prev => ({
+            ...prev,
+            [displayKey]: serverToken
+        }));
+
+        setShowSuggestion(false);
+        setSuggestionType(null);
+    };
+
     const handleSendMessage = async () => {
         if (!inputText.trim()) return;
 
@@ -595,7 +1291,6 @@ export default function DraggableChatBubble() {
 
         let currentMessage = inputText;
 
-        // Thay thế display text bằng server token
         Object.keys(selectedSuggestions).forEach(displayKey => {
             const serverToken = selectedSuggestions[displayKey];
             if (currentMessage.includes(displayKey)) {
@@ -618,7 +1313,6 @@ export default function DraggableChatBubble() {
         });
     };
 
-    // Upload file
     const pickFile = async () => {
         try {
             setIsUploading(true);
@@ -656,7 +1350,6 @@ export default function DraggableChatBubble() {
         }
     };
 
-    // Gesture handlers
     const onGestureEvent = (event) => {
         translateX.value = offsetX.value + event.nativeEvent.translationX;
         translateY.value = offsetY.value + event.nativeEvent.translationY;
@@ -671,11 +1364,7 @@ export default function DraggableChatBubble() {
         }
     };
 
-    const animatedStyle = useAnimatedStyle(() => ({
-        transform: [{ translateX: translateX.value }, { translateY: translateY.value }],
-    }));
-
-    // Auto scroll to bottom
+    // EFFECTS
     useEffect(() => {
         if (messages.length > 0 && flatListRef.current) {
             setTimeout(() => {
@@ -684,7 +1373,6 @@ export default function DraggableChatBubble() {
         }
     }, [messages]);
 
-    // Thinking dots animation
     useEffect(() => {
         const hasStreaming = messages.some(
             (m) => !m.isUser && m.status === 'streaming' && !`${m.text || ''}`.trim()
@@ -704,13 +1392,7 @@ export default function DraggableChatBubble() {
         return () => clearInterval(t);
     }, [messages]);
 
-    const openHistory = async () => {
-        setShowHistory(true);
-        await loadConversations();
-        await loadDomains(); // Load mapping cho lịch sử
-    };
-
-    // Render message item
+    // RENDER
     const renderMessage = useCallback(({ item }) => (
         <MessageItem
             item={item}
@@ -721,22 +1403,96 @@ export default function DraggableChatBubble() {
             formatTimestamp={formatTimestamp}
             thinkingDots={thinkingDots}
             domainIdToCodeMap={domainIdToCodeMap}
+            onSpeak={speakMessage}
+            isSpeaking={speakingMessageId}
+            onStopSpeaking={stopSpeaking}
         />
-    ), [formatTimestamp, thinkingDots, domainIdToCodeMap]);
+    ), [formatTimestamp, thinkingDots, domainIdToCodeMap, speakMessage, speakingMessageId, stopSpeaking]);
 
-    // Chuyển đổi title lịch sử (xử lý cả token và raw ID)
-    const getDisplayTitle = (title) => {
-        if (!title) return 'Conversation';
-        let display = convertTokensToDisplayWithMap(title, domainIdToCodeMap);
-        // Nếu vẫn còn là raw ID (dạng 01kmqh...)
-        if (domainCodeToIdMap[display]) {
-            display = `@${display}`;
-        }
-        return display;
-    };
+    const renderHistoryItem = useCallback(({ item }) => {
+        const displayTitle = getDisplayTitle(item.title) || 'Cuộc trò chuyện';
+        const isCommand = isCommandText(displayTitle);
+        const truncatedTitle = truncateHistoryText(displayTitle, 2, 100);
+
+        return (
+            <View style={{
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+                borderBottomWidth: 1,
+                borderBottomColor: '#f3f4f6',
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+            }}>
+                <View style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: 16,
+                    backgroundColor: isCommand ? '#fef3c7' : '#e0e7ff',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    marginRight: 12,
+                }}>
+                    <MaterialIcons
+                        name={isCommand ? 'bolt' : 'chat-bubble-outline'}
+                        size={16}
+                        color={isCommand ? '#d97706' : '#4f46e5'}
+                    />
+                </View>
+
+                <TouchableOpacity
+                    onPress={async () => {
+                        await openConversation(item.id);
+                        setInputText('');
+                        setShowHistory(false);
+                    }}
+                    style={{ flex: 1 }}
+                >
+                    <Text
+                        style={{
+                            fontSize: 14,
+                            color: '#111827',
+                            fontWeight: '500',
+                            marginBottom: 4,
+                        }}
+                        numberOfLines={2}
+                    >
+                        {truncatedTitle}
+                    </Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        {isCommand && (
+                            <View style={{
+                                backgroundColor: '#fef3c7',
+                                paddingHorizontal: 6,
+                                paddingVertical: 2,
+                                borderRadius: 4,
+                                marginRight: 6,
+                            }}>
+                                <Text style={{ fontSize: 10, color: '#b45309', fontWeight: '600' }}>
+                                    Command
+                                </Text>
+                            </View>
+                        )}
+                        <Text style={{ fontSize: 11, color: '#6b7280' }}>
+                            {formatVietnamTime(item.updated_at || item.created_at)}
+                        </Text>
+                    </View>
+                </TouchableOpacity>
+
+                {/* ✅ Nút xóa */}
+                <TouchableOpacity
+                    onPress={() => deleteConversation(item.id)}
+                    style={{ padding: 8 }}
+                >
+                    <MaterialIcons name="delete-outline" size={20} color="#ef4444" />
+                </TouchableOpacity>
+            </View>
+        );
+    }, [domainIdToCodeMap, domainCodeToIdMap]);
 
     return (
         <>
+            {/* Draggable Chat Bubble */}
             <PanGestureHandler onGestureEvent={onGestureEvent} onHandlerStateChange={onHandlerStateChange}>
                 <Animated.View style={[{ position: 'absolute', bottom: scale(92), right: scale(20), zIndex: 1000 }, animatedStyle]}>
                     <TouchableOpacity
@@ -760,6 +1516,7 @@ export default function DraggableChatBubble() {
                 </Animated.View>
             </PanGestureHandler>
 
+            {/* Main Chat Modal */}
             <Modal visible={modalVisible} animationType="slide" transparent={false}>
                 <ImageBackground source={botBubbleBg} style={{ flex: 1 }} resizeMode="cover">
                     <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0, 0, 0, 0.7)' }} />
@@ -774,8 +1531,6 @@ export default function DraggableChatBubble() {
                                 flexDirection: 'row',
                                 justifyContent: 'space-between',
                                 alignItems: 'center',
-                                borderTopLeftRadius: 16,
-                                borderTopRightRadius: 16,
                             }}
                         >
                             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -785,7 +1540,10 @@ export default function DraggableChatBubble() {
                                 </Text>
                             </View>
                             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                <TouchableOpacity onPress={newConversation} style={{ marginRight: 12 }}>
+                                <TouchableOpacity onPress={() => {
+                                    newConversation();
+                                    setInputText('');
+                                }} style={{ marginRight: 12 }}>
                                     <MaterialIcons name="add-comment" size={24} color="white" />
                                 </TouchableOpacity>
                                 <TouchableOpacity onPress={openHistory} style={{ marginRight: 12 }}>
@@ -793,6 +1551,7 @@ export default function DraggableChatBubble() {
                                 </TouchableOpacity>
                                 <TouchableOpacity onPress={() => {
                                     newConversation();
+                                    setInputText('');
                                     setModalVisible(false);
                                     setSelectedSuggestions({});
                                 }}>
@@ -827,26 +1586,76 @@ export default function DraggableChatBubble() {
                                 padding: 10,
                             }}>
                                 <Text style={{ fontSize: 12, color: '#9a3412', marginBottom: 6 }}>
-                                    {pendingInterrupt.question || 'Cần xác nhận'}
+                                    {pendingInterrupt.question || 'Vui lòng cung cấp thông tin:'}
                                 </Text>
-                                <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-                                    {(pendingInterrupt.options || ['Đồng ý', 'Từ chối']).map((opt) => (
+
+                                {pendingInterrupt.reason === 'information_gathering' ||
+                                    pendingInterrupt.reason === 'upload_required' ? (
+                                    // ✅ Hiển thị text input
+                                    <View>
+                                        <TextInput
+                                            style={{
+                                                backgroundColor: 'white',
+                                                borderWidth: 1,
+                                                borderColor: '#fdba74',
+                                                borderRadius: 8,
+                                                padding: 10,
+                                                marginBottom: 0,
+                                                fontSize: 14,
+                                            }}
+                                            placeholder="Nhập câu trả lời..."
+                                            value={interruptAnswer}
+                                            onChangeText={setInterruptAnswer}
+                                            multiline
+                                        />
+                                        <Text style={{
+                                            fontSize: 12,
+                                            color: '#9a3412',
+                                            marginBottom: 8,
+                                            fontStyle: 'italic',
+                                        }}>
+                                        </Text>
                                         <TouchableOpacity
-                                            key={opt}
-                                            onPress={() => answerInterrupt(opt)}
+                                            onPress={() => {
+                                                if (interruptAnswer.trim()) {
+                                                    answerInterrupt(interruptAnswer.trim());
+                                                    setInterruptAnswer('');
+                                                }
+                                            }}
                                             style={{
                                                 backgroundColor: '#fb923c',
-                                                borderRadius: 999,
-                                                paddingHorizontal: 10,
-                                                paddingVertical: 6,
-                                                marginRight: 8,
-                                                marginBottom: 6,
+                                                borderRadius: 8,
+                                                padding: 10,
+                                                alignItems: 'center',
                                             }}
                                         >
-                                            <Text style={{ color: 'white', fontSize: 12 }}>{opt}</Text>
+                                            <Text style={{ color: 'white', fontWeight: '600' }}>Gửi</Text>
                                         </TouchableOpacity>
-                                    ))}
-                                </View>
+                                    </View>
+                                ) : (
+                                    // Hiển thị buttons cho các reason khác
+                                    <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+                                        {(pendingInterrupt.options?.filter(opt => opt && opt.trim()).length > 0
+                                            ? pendingInterrupt.options
+                                            : ['Đồng ý', 'Từ chối']
+                                        ).map((opt, idx) => (
+                                            <TouchableOpacity
+                                                key={idx}
+                                                onPress={() => answerInterrupt(opt)}
+                                                style={{
+                                                    backgroundColor: '#fb923c',
+                                                    borderRadius: 999,
+                                                    paddingHorizontal: 10,
+                                                    paddingVertical: 6,
+                                                    marginRight: 8,
+                                                    marginBottom: 6,
+                                                }}
+                                            >
+                                                <Text style={{ color: 'white', fontSize: 12 }}>{opt}</Text>
+                                            </TouchableOpacity>
+                                        ))}
+                                    </View>
+                                )}
                             </View>
                         )}
 
@@ -871,7 +1680,7 @@ export default function DraggableChatBubble() {
                                     maxHeight: 100,
                                     textAlignVertical: 'top',
                                 }}
-                                placeholder={editingMessageId ? 'Sửa tin nhắn...' : 'Bạn cần tôi giúp gì? (gõ / để dùng lệnh, @ để chọn tài liệu)'}
+                                placeholder={editingMessageId ? 'Sửa tin nhắn...' : 'Bạn cần tôi giúp gì?'}
                                 value={inputText}
                                 onChangeText={handleTextChange}
                                 onSelectionChange={(e) => setCursorPosition(e.nativeEvent.selection.start)}
@@ -907,7 +1716,17 @@ export default function DraggableChatBubble() {
                                             }, ringStyle]} />
                                         )}
                                         <TouchableOpacity
-                                            onPress={isListening ? stopListening : startListening}
+                                            onPress={async () => {
+                                                try {
+                                                    if (isListening) {
+                                                        await stopListening();
+                                                    } else {
+                                                        await startListening();
+                                                    }
+                                                } catch (err) {
+                                                    // Mic press error
+                                                }
+                                            }}
                                             style={{
                                                 width: 40,
                                                 height: 40,
@@ -985,51 +1804,55 @@ export default function DraggableChatBubble() {
             {/* History Modal */}
             <Modal visible={showHistory} animationType="slide" transparent>
                 <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' }}>
-                    <View style={{ backgroundColor: 'white', borderTopLeftRadius: 16, borderTopRightRadius: 16, maxHeight: '65%' }}>
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 14, borderBottomWidth: 1, borderBottomColor: '#e5e7eb' }}>
-                            <Text style={{ fontSize: 16, fontWeight: '600', color: '#111827' }}>Lịch sử hội thoại</Text>
-                            <View style={{ flexDirection: 'row' }}>
-                                <TouchableOpacity onPress={loadConversations} style={{ marginRight: 12 }}>
-                                    <MaterialIcons name="refresh" size={22} color="#374151" />
-                                </TouchableOpacity>
-                                <TouchableOpacity onPress={() => setShowHistory(false)}>
-                                    <MaterialIcons name="close" size={22} color="#374151" />
-                                </TouchableOpacity>
-                            </View>
+                    <View style={{ backgroundColor: 'white', borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '70%' }}>
+                        <View style={{
+                            flexDirection: 'row',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            padding: 16,
+                            borderBottomWidth: 1,
+                            borderBottomColor: '#e5e7eb'
+                        }}>
+                            <Text style={{ fontSize: 18, fontWeight: '600', color: '#111827' }}>
+                                Lịch sử hội thoại
+                            </Text>
+                            <TouchableOpacity onPress={() => setShowHistory(false)}>
+                                <MaterialIcons name="close" size={24} color="#374151" />
+                            </TouchableOpacity>
                         </View>
-                        <FlatList
-                            data={sortedConversations}
-                            keyExtractor={(item, idx) => item.id || `${idx}`}
-                            renderItem={({ item }) => (
-                                <View style={{
-                                    paddingHorizontal: 14,
-                                    paddingVertical: 12,
-                                    borderBottomWidth: 1,
-                                    borderBottomColor: '#f3f4f6',
-                                    flexDirection: 'row',
-                                    alignItems: 'center',
-                                    justifyContent: 'space-between',
-                                }}>
-                                    <TouchableOpacity
-                                        onPress={async () => {
-                                            await openConversation(item.id);
-                                            setShowHistory(false);
-                                        }}
-                                        style={{ flex: 1 }}
-                                    >
-                                        <Text style={{ fontSize: 14, color: '#111827' }}>
-                                            {getDisplayTitle(item.title) || item.id || 'Conversation'}
-                                        </Text>
-                                        <Text style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
-                                            {formatVietnamTime(item.updated_at || item.created_at)}
-                                        </Text>
-                                    </TouchableOpacity>
-                                    <TouchableOpacity onPress={() => deleteConversation(item.id)} style={{ padding: 4 }}>
-                                        <MaterialIcons name="delete-outline" size={20} color="#ef4444" />
-                                    </TouchableOpacity>
-                                </View>
-                            )}
-                        />
+
+                        {loadingHistory ? (
+                            <View style={{ padding: 16 }}>
+                                {[1, 2, 3, 4, 5].map((i) => (
+                                    <SkeletonHistoryItem key={i} />
+                                ))}
+                            </View>
+                        ) : sortedConversations.length === 0 ? (
+                            <View style={{ padding: 48, alignItems: 'center', justifyContent: 'center' }}>
+                                <MaterialIcons name="history" size={56} color="#d1d5db" />
+                                <Text style={{ marginTop: 16, fontSize: 16, color: '#6b7280', fontWeight: '500' }}>
+                                    Chưa có lịch sử hội thoại
+                                </Text>
+                                <Text style={{ marginTop: 4, fontSize: 14, color: '#9ca3af' }}>
+                                    Bắt đầu trò chuyện để lưu lại lịch sử
+                                </Text>
+                            </View>
+                        ) : (
+                            <FlatList
+                                data={sortedConversations}
+                                keyExtractor={(item) => item.id || `${item.created_at}`}
+                                renderItem={renderHistoryItem}
+                                refreshControl={
+                                    <RefreshControl
+                                        refreshing={refreshing}
+                                        onRefresh={onRefresh}
+                                        colors={['#2563eb']}
+                                        tintColor="#2563eb"
+                                    />
+                                }
+                                contentContainerStyle={{ flexGrow: 1 }}
+                            />
+                        )}
                     </View>
                 </View>
             </Modal>

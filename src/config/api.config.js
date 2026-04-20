@@ -108,11 +108,12 @@ export const API_ENDPOINTS = {
 
 // Cấu hình request
 export const API_CONFIG = {
-    timeout: 30000,
-    retryCount: 3,
-    retryDelay: 1000,
     headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-    }
+    },
+    timeout: 30000,  // 30s cho request thường
+
+    // ✅ Thêm timeout riêng cho gen báo cáo
+    reportGenerationTimeout: 900000,  // 15 phút
 };

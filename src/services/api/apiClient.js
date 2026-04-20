@@ -1,11 +1,10 @@
-
 import { API_ENDPOINTS, API_CONFIG } from '../../config/api.config';
 
 class ApiClient {
     constructor() {
         this.baseURL = API_ENDPOINTS.BASE_URL;
         this.headers = { ...API_CONFIG.headers };
-        this.timeout = API_CONFIG.timeout;
+        this.defaultTimeout = API_CONFIG.timeout;
     }
 
     setAuthToken(token) {
@@ -24,8 +23,10 @@ class ApiClient {
     }
 
     async request(endpoint, options = {}) {
+        // ✅ Cho phép truyền timeout riêng cho từng request
+        const requestTimeout = options.timeout || this.defaultTimeout;
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+        const timeoutId = setTimeout(() => controller.abort(), requestTimeout);
 
         try {
             const response = await fetch(`${this.baseURL}${endpoint}`, {
@@ -36,47 +37,82 @@ class ApiClient {
 
             clearTimeout(timeoutId);
 
+            // Xử lý response không phải JSON
+            const contentType = response.headers.get('content-type');
+
             if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.message || `HTTP ${response.status}`);
+                let errorMessage = `HTTP ${response.status}`;
+                try {
+                    if (contentType && contentType.includes('application/json')) {
+                        const error = await response.json();
+                        errorMessage = error.message || error.msg || errorMessage;
+                    } else {
+                        const errorText = await response.text();
+                        if (errorText) errorMessage = errorText;
+                    }
+                } catch (e) {
+                    // Ignore parse error
+                }
+                throw new Error(errorMessage);
             }
 
-            return await response.json();
+            // Nếu response là JSON
+            if (contentType && contentType.includes('application/json')) {
+                return await response.json();
+            }
+
+            // Nếu response là text
+            return await response.text();
         } catch (error) {
             clearTimeout(timeoutId);
             if (error.name === 'AbortError') {
-                throw new Error('Request timeout');
+                throw new Error('Request timeout - Yêu cầu mất quá nhiều thời gian');
             }
             throw error;
         }
     }
 
-    get(endpoint, params = {}) {
+    get(endpoint, params = {}, options = {}) {
         const query = Object.keys(params)
             .filter((key) => params[key] !== undefined && params[key] !== null && params[key] !== '')
             .map((key) => `${encodeURIComponent(key)}=${encodeURIComponent(String(params[key]))}`)
             .join('&');
         const sep = endpoint.includes('?') ? '&' : '?';
         const finalEndpoint = query ? `${endpoint}${sep}${query}` : endpoint;
-        return this.request(finalEndpoint, { method: 'GET' });
+        return this.request(finalEndpoint, { method: 'GET', ...options });
     }
 
-    post(endpoint, data) {
+    post(endpoint, data, options = {}) {
         return this.request(endpoint, {
             method: 'POST',
             body: JSON.stringify(data),
+            ...options,
         });
     }
 
-    put(endpoint, data) {
+    put(endpoint, data, options = {}) {
         return this.request(endpoint, {
             method: 'PUT',
             body: JSON.stringify(data),
+            ...options,
         });
     }
 
-    delete(endpoint) {
-        return this.request(endpoint, { method: 'DELETE' });
+    delete(endpoint, options = {}) {
+        return this.request(endpoint, { method: 'DELETE', ...options });
+    }
+
+    // ✅ Thêm method upload file với timeout tùy chỉnh
+    upload(endpoint, formData, options = {}) {
+        return this.request(endpoint, {
+            method: 'POST',
+            body: formData,
+            headers: {
+                // Không set Content-Type khi upload file
+                'Content-Type': undefined,
+            },
+            ...options,
+        });
     }
 }
 
