@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, Modal, FlatList, RefreshControl } from 'react-native';
+import { View, Text, TouchableOpacity, FlatList, RefreshControl, Animated } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 
 const SkeletonHistoryItem = () => (
@@ -13,44 +13,52 @@ const SkeletonHistoryItem = () => (
 );
 
 export default function HistoryModal({ visible, onClose, conversations, loadingHistory, refreshing, onRefresh, renderHistoryItem }) {
-    return (
-        <Modal visible={visible} animationType="slide" transparent>
-            <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' }}>
-                <View style={{ backgroundColor: 'white', borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '70%' }}>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: '#e5e7eb' }}>
-                        <Text style={{ fontSize: 18, fontWeight: '600', color: '#111827' }}>Lịch sử hội thoại</Text>
-                        <TouchableOpacity onPress={onClose}>
-                            <MaterialIcons name="close" size={24} color="#374151" />
-                        </TouchableOpacity>
-                    </View>
+    if (!visible) return null;
 
-                    {loadingHistory ? (
-                        <View style={{ padding: 16 }}>
-                            {[1, 2, 3, 4, 5].map(i => <SkeletonHistoryItem key={i} />)}
-                        </View>
-                    ) : conversations.length === 0 ? (
-                        <View style={{ padding: 48, alignItems: 'center', justifyContent: 'center' }}>
-                            <MaterialIcons name="history" size={56} color="#d1d5db" />
-                            <Text style={{ marginTop: 16, fontSize: 16, color: '#6b7280', fontWeight: '500' }}>
-                                Chưa có lịch sử hội thoại
-                            </Text>
-                            <Text style={{ marginTop: 4, fontSize: 14, color: '#9ca3af' }}>
-                                Bắt đầu trò chuyện để lưu lại lịch sử
-                            </Text>
-                        </View>
-                    ) : (
-                        <FlatList
-                            data={conversations}
-                            keyExtractor={item => item.id || `${item.created_at}`}
-                            renderItem={renderHistoryItem}
-                            refreshControl={
-                                <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#2563eb']} tintColor="#2563eb" />
-                            }
-                            contentContainerStyle={{ flexGrow: 1 }}
-                        />
-                    )}
+    return (
+        <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999 }}>
+            {/* Backdrop */}
+            <TouchableOpacity
+                style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)' }}
+                activeOpacity={1}
+                onPress={onClose}
+            />
+
+            {/* Bottom sheet */}
+            <View style={{ backgroundColor: 'white', borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '70%' }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: '#e5e7eb' }}>
+                    <Text style={{ fontSize: 18, fontWeight: '600', color: '#111827' }}>Lịch sử hội thoại</Text>
+                    <TouchableOpacity onPress={onClose}>
+                        <MaterialIcons name="close" size={24} color="#374151" />
+                    </TouchableOpacity>
                 </View>
+
+                {loadingHistory ? (
+                    <View style={{ padding: 16 }}>
+                        {[1, 2, 3, 4, 5].map(i => <SkeletonHistoryItem key={i} />)}
+                    </View>
+                ) : conversations.length === 0 ? (
+                    <View style={{ padding: 48, alignItems: 'center', justifyContent: 'center' }}>
+                        <MaterialIcons name="history" size={56} color="#d1d5db" />
+                        <Text style={{ marginTop: 16, fontSize: 16, color: '#6b7280', fontWeight: '500' }}>
+                            Chưa có lịch sử hội thoại
+                        </Text>
+                        <Text style={{ marginTop: 4, fontSize: 14, color: '#9ca3af' }}>
+                            Bắt đầu trò chuyện để lưu lại lịch sử
+                        </Text>
+                    </View>
+                ) : (
+                    <FlatList
+                        data={conversations}
+                        keyExtractor={item => item.id || `${item.created_at}`}
+                        renderItem={renderHistoryItem}
+                        refreshControl={
+                            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#2563eb']} tintColor="#2563eb" />
+                        }
+                        contentContainerStyle={{ flexGrow: 1 }}
+                    />
+                )}
             </View>
-        </Modal>
+        </View>
     );
 }

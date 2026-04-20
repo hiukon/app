@@ -21,7 +21,7 @@ export const sanitizeTechnicalText = (text) => {
     return patterns.some(p => p.test(text)) ? 'Đã có lỗi xảy ra. Vui lòng thử lại.' : text;
 };
 
-export const PROCESS_PATTERNS = [
+const PROCESS_PATTERNS = [
     'tôi đã trả về phản hồi không hợp lệ', 'để tôi thử lại', 'tìm kiếm báo cáo',
     'tìm kiếm thông tin', 'người dùng muốn biết', 'tìm kiếm kỹ năng', 'observe the result',
     'dựa trên kết quả', 'theo hướng dẫn', 'tôi sẽ tổng hợp', 'tôi cần tìm kiếm',
@@ -44,43 +44,15 @@ export const isProcessLine = (line) => {
 
 export const cleanBotText = (text) => {
     if (!text) return null;
-    const lowerText = text.toLowerCase();
-    const isReportMessage =
-        lowerText.includes('báo cáo') || lowerText.includes('tải xuống') ||
-        lowerText.includes('.doc') || lowerText.includes('kết quả') || text.length > 500;
-
-    if (isReportMessage) {
-        const cleaned = text
-            .replace(/\d{1,2}:\d{2}:\d{2}\s*(AM|PM)/gi, '')
-            .replace(/\d{1,2}:\d{2}:\d{2}\s*(am|pm)/gi, '')
-            .trim();
-        return cleaned.length > 0 ? cleaned : text;
-    }
-
-    const filteredLines = text.split('\n').filter(line => {
-        const lowerLine = line.toLowerCase().trim();
-        if (line.trim().length < 10) return false;
-        if (isProcessLine(line)) return false;
-        if (lowerLine.match(/^\d{1,2}:\d{2}:\d{2}\s*(am|pm)?$/)) return false;
-        if (lowerLine.match(/\d{1,2}:\d{2}:\d{2}\s*(am|pm)/i)) return false;
-        return true;
+    // Chỉ trả null nếu TOÀN BỘ text là process lines (không có nội dung thật)
+    const lines = text.split('\n');
+    const hasRealContent = lines.some(line => {
+        const trimmed = line.trim();
+        if (!trimmed) return false;
+        return !isProcessLine(trimmed);
     });
-
-    let cleaned = filteredLines.join('\n').trim();
-    if (cleaned) {
-        const paragraphs = cleaned.split(/\n\s*\n/).filter(p => p.trim().length >= 10);
-        let chosen = '';
-        for (let i = paragraphs.length - 1; i >= 0; i--) {
-            const p = paragraphs[i].trim();
-            const lowerP = p.toLowerCase();
-            if (!PROCESS_PATTERNS.some(pat => lowerP.includes(pat))) { chosen = p; break; }
-        }
-        cleaned = chosen || paragraphs[paragraphs.length - 1] || cleaned;
-    }
-    cleaned = cleaned?.replace(/\d{1,2}:\d{2}:\d{2}\s*(AM|PM)/gi, '');
-    cleaned = cleaned?.replace(/\d{1,2}:\d{2}:\d{2}\s*(am|pm)/gi, '');
-    if (!cleaned || cleaned.length < 15) return null;
-    return cleaned;
+    if (!hasRealContent) return null;
+    return text;
 };
 
 export const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -99,7 +71,7 @@ export const truncateHistoryText = (text, maxLines = 2, maxChars = 100) => {
     if (truncated.length > maxChars) {
         truncated = truncated.substring(0, maxChars).trim() + '...';
     } else if (lines.length > maxLines) {
-        truncated = truncated + '...';
+        truncated += '...';
     }
     return truncated;
 };

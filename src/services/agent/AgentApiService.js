@@ -11,29 +11,16 @@ class AgentApiService {
     // ✅ THÊM METHOD NÀY
     async fetchArtifacts(token, runId) {
         const url = `${this.baseUrl()}/api/v1/run/${runId}/artifacts`;
-
-        try {
-            const response = await fetch(url, {
-                method: 'GET',
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json',
-                }
-            });
-
-            if (!response.ok) {
-                const errorText = await response.text();
-                throw new Error(`HTTP ${response.status}: ${errorText}`);
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
             }
-
-            const data = await response.json();
-            console.log('📦 Fetched artifacts:', data);
-            return data;
-        } catch (error) {
-            console.error('fetchArtifacts error:', error);
-            throw error;
-        }
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        return response.json();
     }
 
     // ✅ THÊM METHOD NÀY (nếu server yêu cầu signed URL)

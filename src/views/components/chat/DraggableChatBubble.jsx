@@ -337,7 +337,7 @@ export default function DraggableChatBubble() {
                 </TouchableOpacity>
             </View>
         );
-    }, [domainIdToCodeMap, domainCodeToIdMap]);
+    }, [domainIdToCodeMap, domainCodeToIdMap, openConversation, deleteConversation]);
 
     // ── Render ────────────────────────────────────────────────────────────────
     return (
@@ -358,7 +358,7 @@ export default function DraggableChatBubble() {
             <Modal visible={modalVisible} animationType="slide" transparent={false}>
                 <ImageBackground source={botBubbleBg} style={{ flex: 1 }} resizeMode="cover">
                     <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)' }} />
-                    <SafeAreaView style={{ flex: 1, backgroundColor: 'transparent' }}>
+                    <SafeAreaView style={{ flex: 1, backgroundColor: 'transparent', overflow: 'hidden' }}>
                         {/* Header */}
                         <LinearGradient
                             colors={['#732cc9', '#7840f2', '#5c50da', '#5233f0']}
@@ -417,18 +417,18 @@ export default function DraggableChatBubble() {
                             onCancel={cancel}
                         />
                     </SafeAreaView>
+
+                    <HistoryModal
+                        visible={showHistory}
+                        onClose={() => setShowHistory(false)}
+                        conversations={sortedConversations}
+                        loadingHistory={loadingHistory}
+                        refreshing={refreshing}
+                        onRefresh={onRefresh}
+                        renderHistoryItem={renderHistoryItem}
+                    />
                 </ImageBackground>
             </Modal>
-
-            <HistoryModal
-                visible={showHistory}
-                onClose={() => setShowHistory(false)}
-                conversations={sortedConversations}
-                loadingHistory={loadingHistory}
-                refreshing={refreshing}
-                onRefresh={onRefresh}
-                renderHistoryItem={renderHistoryItem}
-            />
 
             <SuggestionModal
                 visible={showSuggestion}
