@@ -5,10 +5,16 @@ import Voice from '@react-native-voice/voice';
 
 export function useVoiceInput({ onPartialResult, onFinalResult }) {
     const [isListening, setIsListening] = useState(false);
+
+    // Base text trước khi session bắt đầu (set lúc bấm mic)
     const committedTextRef = useRef('');
     const hasVoiceResultRef = useRef(false);
 
-    // Lưu callbacks vào ref để listener không bao giờ bị stale dù component re-render
+    // Giữ final text chưa commit — chờ xem partial tiếp theo có phải re-emission không
+    // { sessionText: string, fullText: string } | null
+    const pendingFinalRef = useRef(null);
+
+    // Lưu callbacks vào ref để listener không bao giờ stale khi component re-render
     const onPartialResultRef = useRef(onPartialResult);
     const onFinalResultRef = useRef(onFinalResult);
     useEffect(() => { onPartialResultRef.current = onPartialResult; }, [onPartialResult]);
@@ -34,17 +40,37 @@ export function useVoiceInput({ onPartialResult, onFinalResult }) {
         return () => { if (beatInterval) clearInterval(beatInterval); };
     }, [isListening, micScale]);
 
-    // Setup listeners CHỈ 1 LẦN — tránh re-subscribe làm duplicate/mất text
+    // Setup listeners CHỈ 1 LẦN
     useEffect(() => {
         Voice.onSpeechStart = () => {
             setIsListening(true);
             hasVoiceResultRef.current = false;
+            pendingFinalRef.current = null;
         };
-        Voice.onSpeechEnd = () => setIsListening(false);
+
+        Voice.onSpeechEnd = () => {
+            setIsListening(false);
+            // Commit pending final khi session kết thúc
+            if (pendingFinalRef.current) {
+                committedTextRef.current = pendingFinalRef.current.fullText;
+                pendingFinalRef.current = null;
+            }
+        };
 
         Voice.onSpeechPartialResults = (event) => {
             const partialText = event.value?.[0];
             if (!partialText?.trim()) return;
+
+            if (pendingFinalRef.current) {
+                if (partialText === pendingFinalRef.current.sessionText) {
+                    // Engine đang re-emit lại text vừa commit → bỏ qua
+                    return;
+                }
+                // Partial mới thật sự → giờ mới commit base
+                committedTextRef.current = pendingFinalRef.current.fullText;
+                pendingFinalRef.current = null;
+            }
+
             const base = committedTextRef.current;
             const sep = base && !base.endsWith(' ') ? ' ' : '';
             onPartialResultRef.current?.(base + sep + partialText);
@@ -54,15 +80,22 @@ export function useVoiceInput({ onPartialResult, onFinalResult }) {
             const spokenText = event.value?.[0];
             hasVoiceResultRef.current = true;
             if (!spokenText?.trim()) return;
+
             const base = committedTextRef.current;
             const sep = base && !base.endsWith(' ') ? ' ' : '';
-            const newCommitted = (base + sep + spokenText).trimStart();
-            committedTextRef.current = newCommitted;
-            onFinalResultRef.current?.(newCommitted);
+            const fullText = (base + sep + spokenText).trimStart();
+
+            // Chưa cập nhật committedTextRef ngay — để onSpeechPartialResults phân biệt re-emission
+            pendingFinalRef.current = { sessionText: spokenText, fullText };
+            onFinalResultRef.current?.(fullText);
         };
 
         Voice.onSpeechError = (error) => {
             setIsListening(false);
+            if (pendingFinalRef.current) {
+                committedTextRef.current = pendingFinalRef.current.fullText;
+                pendingFinalRef.current = null;
+            }
             if (hasVoiceResultRef.current) return;
             const silentCodes = ['7', 'no-speech', '5', 'no-match', '2', '6', 'audio-error'];
             const code = error?.error?.code?.toString();
@@ -90,6 +123,7 @@ export function useVoiceInput({ onPartialResult, onFinalResult }) {
             }
             committedTextRef.current = currentText;
             hasVoiceResultRef.current = false;
+            pendingFinalRef.current = null;
             await Voice.start('vi-VN');
             setIsListening(true);
         } catch (error) {

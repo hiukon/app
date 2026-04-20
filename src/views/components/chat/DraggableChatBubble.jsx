@@ -43,15 +43,16 @@ export default function DraggableChatBubble() {
     // ── TTS ──────────────────────────────────────────────────────────────────
     const { speakingMessageId, speakMessage, stopSpeaking } = useTTS();
 
-    // ── Voice ─────────────────────────────────────────────────────────────────
-    const { isListening, startListening, stopListening, ringStyle, committedTextRef } = useVoiceInput({
-        onPartialResult: (text) => setInputText(text),
-        onFinalResult: (text) => setInputText(text),
-    });
-
-    // ── UI state ──────────────────────────────────────────────────────────────
+    // ── UI state (khai báo trước useVoiceInput để callbacks không bị stale) ──
     const [modalVisible, setModalVisible] = useState(false);
     const [inputText, setInputText] = useState('');
+
+    // ── Voice ─────────────────────────────────────────────────────────────────
+    const handleVoiceText = useCallback((text) => setInputText(text), []);
+    const { isListening, startListening, stopListening, ringStyle, committedTextRef } = useVoiceInput({
+        onPartialResult: handleVoiceText,
+        onFinalResult: handleVoiceText,
+    });
     const [selectedModel, setSelectedModel] = useState('intelligent');
     const [showModelPicker, setShowModelPicker] = useState(false);
     const [attachments, setAttachments] = useState([]);
