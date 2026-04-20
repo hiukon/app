@@ -15,3 +15,4 @@ web-build/
 .env.local
 .env.*
 android/.gradle
+./claude

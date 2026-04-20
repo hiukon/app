@@ -605,27 +605,28 @@ class ChatController {
                 this._runActive = false;
 
                 // ==================== XỬ LÝ INTERRUPT ====================
-                if (ev.outcome === 'interrupt' && ev.interrupt) {
-                    console.log('interrupt data:', ev.interrupt);
-
-                    // Validate interrupt data
-                    if (!ev.interrupt.question && !ev.interrupt.options) {
-                        console.warn('Interrupt missing question/options:', ev.interrupt);
-                        ev.interrupt.question = 'Vui lòng cung cấp thông tin:';
+                if (ev.outcome === 'interrupt') {
+                    // Clean up any in-progress streaming message
+                    if (this._currentAssistantId) {
+                        const cur = this.chatModel.getMessages().find(m => m.id === this._currentAssistantId);
+                        if (cur && `${cur.text || ''}`.trim()) {
+                            this.chatModel.updateMessage(this._currentAssistantId, { status: 'sent' });
+                        } else if (cur) {
+                            this.chatModel.removeMessage(this._currentAssistantId);
+                        }
+                        this._currentAssistantId = null;
                     }
 
-                    this.pendingInterrupt = ev.interrupt;
-
-                    const q = ev.interrupt.question || 'Cần xác nhận từ bạn.';
-                    const opts = ev.interrupt.options?.length
-                        ? `\n${ev.interrupt.options.map((o, i) => `${String.fromCharCode(64 + i + 1)}. ${o}`).join('\n')}`
-                        : '';
-
-                    this.chatModel.addMessage({
-                        text: `${q}${opts}`,
-                        isUser: false,
-                        status: 'sent',
-                    });
+                    if (ev.interrupt && !this.pendingInterrupt) {
+                        // HITL_INTERRUPT_MESSAGE didn't fire — handle interrupt here
+                        if (!ev.interrupt.question && !ev.interrupt.options) {
+                            ev.interrupt.question = 'Vui lòng cung cấp thông tin:';
+                        }
+                        this.pendingInterrupt = ev.interrupt;
+                        const q = ev.interrupt.question || 'Cần xác nhận từ bạn.';
+                        this.chatModel.addMessage({ text: q, isUser: false, status: 'sent', isInterruptMessage: true });
+                    }
+                    // else: HITL_INTERRUPT_MESSAGE already set pendingInterrupt and added the question message
                 }
                 // ==================== XỬ LÝ RUN THÀNH CÔNG ====================
                 else {
@@ -840,28 +841,29 @@ class ChatController {
                 if (newOptions.length === 0 && this.pendingInterrupt?.options?.length > 0) {
                     interruptData.options = this.pendingInterrupt.options;
                 }
-                // Preserve question too if missing
                 if (!interruptData.question && this.pendingInterrupt?.question) {
                     interruptData.question = this.pendingInterrupt.question;
                 }
 
                 this.pendingInterrupt = interruptData;
 
-                const q = interruptData.question || 'Cần xác nhận từ bạn.';
-                const opts = interruptData.options?.length
-                    ? `\n${interruptData.options.map((o, i) => `${String.fromCharCode(64 + i + 1)}. ${o}`).join('\n')}`
-                    : '';
-                const newText = `${q}${opts}`;
+                // Finalize any in-progress streaming message before adding interrupt question
+                if (this._currentAssistantId) {
+                    const cur = this.chatModel.getMessages().find(m => m.id === this._currentAssistantId);
+                    if (cur && `${cur.text || ''}`.trim()) {
+                        this.chatModel.updateMessage(this._currentAssistantId, { status: 'sent' });
+                    } else if (cur) {
+                        this.chatModel.removeMessage(this._currentAssistantId);
+                    }
+                    this._currentAssistantId = null;
+                }
 
-                // Skip duplicate if RUN_FINISHED already added this message
-                const msgs = this.chatModel.getMessages();
-                const lastBot = msgs.slice().reverse().find(m => !m.isUser);
-                if (!lastBot || lastBot.text !== newText) {
-                    this.chatModel.addMessage({
-                        text: newText,
-                        isUser: false,
-                        status: 'sent',
-                    });
+                // Add interrupt question as a dedicated, never-filtered message
+                const q = interruptData.question || 'Cần xác nhận từ bạn.';
+                const existingMsgs = this.chatModel.getMessages();
+                const lastBotMsg = existingMsgs.slice().reverse().find(m => !m.isUser);
+                if (!lastBotMsg?.isInterruptMessage || lastBotMsg.text !== q) {
+                    this.chatModel.addMessage({ text: q, isUser: false, status: 'sent', isInterruptMessage: true });
                 }
                 onMessagesUpdate?.();
                 break;

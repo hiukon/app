@@ -1,6 +1,6 @@
-import React from 'react';
-import { View, Text, ScrollView } from 'react-native';
-import { Linking } from 'react-native';
+import React, { useState, useRef, useCallback } from 'react';
+import { View, Text, PanResponder, TouchableWithoutFeedback, Linking } from 'react-native';
+import { ScrollView } from 'react-native-gesture-handler';
 
 // Unicode circled numbers: ①-⑳ (1-20), ㉑-㉟ (21-35), ㊱-㊿ (36-50)
 export const toCircledNumber = (n) => {
@@ -13,13 +13,125 @@ export const toCircledNumber = (n) => {
 
 const TABLE_CELL_WIDTH = 130;
 
+function HorizontalScrollTable({ children }) {
+    const [containerWidth, setContainerWidth] = useState(0);
+    const [contentWidth, setContentWidth] = useState(0);
+    const [scrollX, setScrollX] = useState(0);
+
+    const scrollViewRef = useRef(null);
+    const containerWidthRef = useRef(0);
+    const contentWidthRef = useRef(0);
+    const startScrollXRef = useRef(0);
+    const scrollXRef = useRef(0);
+
+    const scrollable = contentWidth > containerWidth + 2;
+    const thumbWidth = scrollable ? Math.max(44, (containerWidth / contentWidth) * containerWidth) : 0;
+    const maxThumbLeft = containerWidth - thumbWidth;
+    const thumbLeft = scrollable
+        ? Math.min((scrollX / (contentWidth - containerWidth)) * maxThumbLeft, maxThumbLeft)
+        : 0;
+
+    // PanResponder để kéo thumb
+    const panResponder = useRef(
+        PanResponder.create({
+            onStartShouldSetPanResponder: () => true,
+            onMoveShouldSetPanResponder: () => true,
+            onPanResponderGrant: () => {
+                startScrollXRef.current = scrollXRef.current;
+            },
+            onPanResponderMove: (_, gestureState) => {
+                const cw = containerWidthRef.current;
+                const tw = contentWidthRef.current;
+                if (!cw || !tw) return;
+                const thumb = Math.max(44, (cw / tw) * cw);
+                const maxLeft = cw - thumb;
+                const dScroll = (gestureState.dx / maxLeft) * (tw - cw);
+                const target = Math.max(0, Math.min(startScrollXRef.current + dScroll, tw - cw));
+                scrollViewRef.current?.scrollTo({ x: target, animated: false });
+            },
+        })
+    ).current;
+
+    // Tap trên track để nhảy tới vị trí đó
+    const handleTrackPress = useCallback((e) => {
+        const tapX = e.nativeEvent.locationX;
+        const cw = containerWidthRef.current;
+        const tw = contentWidthRef.current;
+        if (!cw || !tw) return;
+        const thumb = Math.max(44, (cw / tw) * cw);
+        const ratio = Math.max(0, Math.min((tapX - thumb / 2) / (cw - thumb), 1));
+        scrollViewRef.current?.scrollTo({ x: ratio * (tw - cw), animated: true });
+    }, []);
+
+    const onLayout = useCallback(e => {
+        const w = e.nativeEvent.layout.width;
+        setContainerWidth(w);
+        containerWidthRef.current = w;
+    }, []);
+
+    const onContentSizeChange = useCallback((w) => {
+        setContentWidth(w);
+        contentWidthRef.current = w;
+    }, []);
+
+    const onScroll = useCallback(e => {
+        const { x } = e.nativeEvent.contentOffset;
+        setScrollX(x);
+        scrollXRef.current = x;
+    }, []);
+
+    return (
+        <View style={{ marginVertical: 10 }}>
+            <ScrollView
+                ref={scrollViewRef}
+                horizontal
+                nestedScrollEnabled
+                showsHorizontalScrollIndicator={false}
+                onLayout={onLayout}
+                onContentSizeChange={onContentSizeChange}
+                onScroll={onScroll}
+                scrollEventThrottle={16}
+            >
+                <View style={{ borderWidth: 1, borderColor: '#d1d5db', borderRadius: 8, overflow: 'hidden', backgroundColor: '#ffffff' }}>
+                    {children}
+                </View>
+            </ScrollView>
+
+            {scrollable && (
+                <View style={{ marginTop: 8, marginHorizontal: 2 }}>
+                    {/* Track — tap để nhảy vị trí */}
+                    <TouchableWithoutFeedback onPress={handleTrackPress}>
+                        <View style={{ height: 8, backgroundColor: '#e5e7eb', borderRadius: 99, justifyContent: 'center' }}>
+                            {/* Thumb — kéo để scroll */}
+                            <View
+                                style={{
+                                    position: 'absolute',
+                                    left: thumbLeft,
+                                    width: thumbWidth,
+                                    height: 8,
+                                    backgroundColor: '#7c3aed',
+                                    borderRadius: 99,
+                                    shadowColor: '#7c3aed',
+                                    shadowOpacity: 0.4,
+                                    shadowRadius: 3,
+                                    elevation: 2,
+                                }}
+                                {...panResponder.panHandlers}
+                            />
+                        </View>
+                    </TouchableWithoutFeedback>
+                    <Text style={{ fontSize: 10, color: '#9ca3af', textAlign: 'center', marginTop: 4 }}>
+                        ← vuốt hoặc kéo thanh để xem thêm →
+                    </Text>
+                </View>
+            )}
+        </View>
+    );
+}
+
 const baseMarkdownTableRules = {
     table: (node, children) => (
-        <ScrollView key={node.key} horizontal showsHorizontalScrollIndicator style={{ marginVertical: 10 }}>
-            <View style={{ borderWidth: 1, borderColor: '#d1d5db', borderRadius: 8, overflow: 'hidden', backgroundColor: '#ffffff' }}>
-                {children}
-            </View>
-        </ScrollView>
+        <HorizontalScrollTable key={node.key}>{children}</HorizontalScrollTable>
     ),
     thead: (node, children) => (
         <View key={node.key} style={{ backgroundColor: '#ede9fe' }}>{children}</View>
@@ -57,8 +169,12 @@ export const buildMarkdownRules = (citations, onCitationPress) => ({
         while ((match = regex.exec(content)) !== null) {
             if (match.index > lastIndex) segments.push(content.slice(lastIndex, match.index));
             const refId = match[1];
-            const id = Number(refId);
-            const passage = citations?.passages?.find(p => p.id === id || String(p.id) === refId);
+            const idx = Number(refId) - 1; // citations are 1-based, array is 0-based
+            // Primary: use array index (passage order = citation order from API)
+            // Fallback: match by passage.id field
+            const passage = citations?.passages?.[idx] ||
+                citations?.passages?.find(p => String(p.id) === refId) ||
+                null;
             const file = passage ? citations?.files?.find(f => f.id === passage.file_id) : null;
             segments.push(
                 <Text

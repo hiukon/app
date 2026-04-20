@@ -15,6 +15,8 @@ export function useChat() {
         return rawMessages.filter(msg => {
             // Luôn giữ message của user
             if (msg.isUser) return true;
+            // Luôn giữ interrupt question messages
+            if (msg.isInterruptMessage) return true;
 
             // ✅ Kiểm tra nếu là message chứa báo cáo - LUÔN HIỂN THỊ
             if (msg.text) {
@@ -221,36 +223,18 @@ export function useChat() {
     const answerInterrupt = async (input) => {
         setIsSending(true);
 
-        // ✅ Thêm message chờ qua chatModel
-        const waitingMessage = {
-            text: '⏳ Đang tạo báo cáo, vui lòng đợi (có thể mất 10-15 phút)...',
-            isUser: false,
-            status: 'streaming',
-        };
-
-        // Truy cập chatModel từ chatController
-        const waitingId = chatController.chatModel?.addMessage?.(waitingMessage)?.id;
-        updateFilteredMessages();
+        // Xóa pendingInterrupt khỏi UI ngay (lựa chọn đã hiển thị trong InlineInterrupt)
+        setPendingInterrupt(null);
 
         try {
-            // ✅ Xóa message chờ trước khi resume
-            if (waitingId) {
-                chatController.chatModel?.removeMessage?.(waitingId);
-                updateFilteredMessages();
-            }
 
             const bump = () => {
                 updateFilteredMessages();
                 setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
             };
 
-            console.log('[DEBUG] answerInterrupt called with input:', input);
-            const intr = chatController.getPendingInterrupt?.() || null;
-            console.log('[DEBUG] interrupt from controller:', intr);
-
+                const intr = chatController.getPendingInterrupt?.() || null;
             const payload = toInterruptPayload(intr, input);
-            console.log('[DEBUG] payload to resume:', payload);
-
             const out = await chatController.resumeAgentInterrupt(payload, bump);
 
             updateFilteredMessages();
@@ -258,26 +242,12 @@ export function useChat() {
             return out;
 
         } catch (error) {
-            console.error('[ERROR] answerInterrupt failed:', error);
-
-            // Nếu lỗi, cập nhật message chờ thành lỗi (nếu chưa xóa)
-            if (waitingId) {
-                const stillExists = chatController.chatModel?.getMessages?.().find(m => m.id === waitingId);
-                if (stillExists) {
-                    chatController.chatModel?.updateMessage?.(waitingId, {
-                        text: `❌ Có lỗi khi tạo báo cáo: ${error.message}. Vui lòng thử lại.`,
-                        status: 'error',
-                    });
-                } else {
-                    // Nếu đã xóa rồi thì thêm message lỗi mới
-                    chatController.chatModel?.addMessage?.({
-                        text: `❌ Có lỗi khi tạo báo cáo: ${error.message}. Vui lòng thử lại.`,
-                        isUser: false,
-                        status: 'error',
-                    });
-                }
-                updateFilteredMessages();
-            }
+            chatController.chatModel?.addMessage?.({
+                text: `❌ Có lỗi xử lý: ${error.message}. Vui lòng thử lại.`,
+                isUser: false,
+                status: 'error',
+            });
+            updateFilteredMessages();
         } finally {
             setIsSending(false);
         }

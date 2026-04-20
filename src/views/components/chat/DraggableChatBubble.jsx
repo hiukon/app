@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { View, Text, TouchableOpacity, Modal, FlatList, SafeAreaView, ImageBackground, Image } from 'react-native';
 import { PanGestureHandler, State } from 'react-native-gesture-handler';
 import Animated, { useSharedValue, useAnimatedStyle, withSpring } from 'react-native-reanimated';
@@ -17,7 +17,6 @@ import DomainService from '../../../services/domain/DomainService';
 import ModelPickerModal from './ModelPickerModal';
 import SuggestionModal from './SuggestionModal';
 import BubbleMessageItem from './BubbleMessageItem';
-import PendingInterrupt from './PendingInterrupt';
 import HistoryModal from './HistoryModal';
 import CitationModal from './CitationModal';
 import ChatInputArea from './ChatInputArea';
@@ -236,6 +235,9 @@ export default function DraggableChatBubble() {
     const handleSendMessage = async () => {
         if (!inputText.trim()) return;
 
+        // Tắt mic nếu đang nghe trước khi gửi
+        if (isListening) await stopListening();
+
         if (editingMessageId) {
             await resendEditedMessage(editingMessageId, inputText);
             setEditingMessageId(null);
@@ -243,18 +245,8 @@ export default function DraggableChatBubble() {
             return;
         }
 
-        if (pendingInterrupt) {
-            const reason = pendingInterrupt.reason || '';
-            const hasFreeText = ['information_gathering', 'upload_required', 'policy_hold'].includes(reason)
-                || !(pendingInterrupt.options?.length > 0);
-            if (hasFreeText) {
-                const ans = inputText.trim();
-                setInputText('');
-                committedTextRef.current = '';
-                await answerInterrupt(ans);
-                return;
-            }
-        }
+        // Interrupt is now handled by PendingInterrupt's inline input — skip here
+        if (pendingInterrupt) return;
 
         let currentMessage = inputText;
         Object.keys(selectedSuggestions).forEach(displayKey => {
@@ -299,19 +291,37 @@ export default function DraggableChatBubble() {
     const handleCitationPress = useCallback((data) => setCitationModal(data), []);
 
     // ── Render helpers ────────────────────────────────────────────────────────
-    const renderMessage = useCallback(({ item }) => (
-        <BubbleMessageItem
-            item={item}
-            onLongPressUserMessage={(id, text) => { setEditingMessageId(id); setInputText(text); }}
-            formatTimestamp={formatTimestamp}
-            thinkingDots={thinkingDots}
-            domainIdToCodeMap={domainIdToCodeMap}
-            onSpeak={speakMessage}
-            isSpeaking={speakingMessageId}
-            onStopSpeaking={stopSpeaking}
-            onCitationPress={handleCitationPress}
-        />
-    ), [formatTimestamp, thinkingDots, domainIdToCodeMap, speakMessage, speakingMessageId, stopSpeaking, handleCitationPress]);
+    // Find the interrupt question message id — prefer isInterruptMessage flag, fallback to last bot
+    const interruptMessageId = useMemo(() => {
+        if (!pendingInterrupt) return null;
+        for (let i = messages.length - 1; i >= 0; i--) {
+            if (!messages[i].isUser && messages[i].isInterruptMessage) return messages[i].id;
+        }
+        for (let i = messages.length - 1; i >= 0; i--) {
+            if (!messages[i].isUser) return messages[i].id;
+        }
+        return null;
+    }, [messages, pendingInterrupt]);
+
+    const renderMessage = useCallback(({ item }) => {
+        const isLastBot = !item.isUser && item.id === interruptMessageId && !!pendingInterrupt;
+        return (
+            <BubbleMessageItem
+                item={item}
+                onLongPressUserMessage={(id, text) => { setEditingMessageId(id); setInputText(text); }}
+                formatTimestamp={formatTimestamp}
+                thinkingDots={thinkingDots}
+                domainIdToCodeMap={domainIdToCodeMap}
+                onSpeak={speakMessage}
+                isSpeaking={speakingMessageId}
+                onStopSpeaking={stopSpeaking}
+                onCitationPress={handleCitationPress}
+                pendingInterrupt={isLastBot ? pendingInterrupt : null}
+                answerInterrupt={isLastBot ? answerInterrupt : null}
+                isSending={isSending}
+            />
+        );
+    }, [formatTimestamp, thinkingDots, domainIdToCodeMap, speakMessage, speakingMessageId, stopSpeaking, handleCitationPress, interruptMessageId, pendingInterrupt, answerInterrupt, isSending]);
 
     const renderHistoryItem = useCallback(({ item }) => {
         const displayTitle = getDisplayTitle(item.title) || 'Cuộc trò chuyện';
@@ -396,8 +406,6 @@ export default function DraggableChatBubble() {
                             windowSize={21}
                             removeClippedSubviews={true}
                         />
-
-                        <PendingInterrupt pendingInterrupt={pendingInterrupt} answerInterrupt={answerInterrupt} />
 
                         <ChatInputArea
                             inputText={inputText}

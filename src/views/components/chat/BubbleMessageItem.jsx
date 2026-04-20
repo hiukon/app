@@ -1,5 +1,5 @@
-import React, { memo, useMemo } from 'react';
-import { View, Text, TouchableOpacity } from 'react-native';
+import React, { memo, useMemo, useState } from 'react';
+import { View, Text, TouchableOpacity, ActivityIndicator, TextInput } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
 import Markdown from 'react-native-markdown-display';
@@ -28,6 +28,149 @@ const MD_STYLES = {
     blockquote: { borderLeftWidth: 4, borderLeftColor: '#2563eb', paddingLeft: 16, paddingVertical: 8, marginVertical: 12, marginLeft: 0, backgroundColor: '#f8fafc', borderRadius: 8 },
 };
 
+// Inline interrupt UI embedded inside the bot bubble
+function InlineInterrupt({ pendingInterrupt, answerInterrupt, isSending }) {
+    const [selectedIdx, setSelectedIdx] = useState(null); // which option is highlighted
+    const [customText, setCustomText] = useState('');     // free-text typed by user
+    const [loading, setLoading] = useState(false);
+
+    const opts = (pendingInterrupt.options || []).filter(o => o?.trim());
+    const isApproval = ['human_approval', 'database_modification', 'multi_step_confirm', 'error_recovery']
+        .includes(pendingInterrupt.reason);
+    const displayOpts = opts.length > 0 ? opts : (isApproval ? ['Đồng ý', 'Từ chối'] : []);
+    const isDisabledAll = isSending || loading;
+    const nextLabel = String.fromCharCode(65 + displayOpts.length);
+
+    // Resolved value to submit: selected option text OR custom text
+    const selectedText = selectedIdx !== null ? displayOpts[selectedIdx] : '';
+    const submitValue = (selectedText || customText).trim();
+
+    const handleOptionClick = (idx) => {
+        if (isDisabledAll) return;
+        setSelectedIdx(idx);
+        setCustomText(''); // clear custom input when option chosen
+    };
+
+    const handleCustomChange = (t) => {
+        setCustomText(t);
+        setSelectedIdx(null); // deselect option when typing custom
+    };
+
+    const handleSubmit = async () => {
+        if (!submitValue || isDisabledAll) return;
+        setLoading(true);
+        await answerInterrupt(submitValue);
+        setLoading(false);
+    };
+
+    return (
+        <View style={{ marginTop: 10, borderTopWidth: 1, borderTopColor: '#f0f0f0', paddingTop: 10 }}>
+            {/* Options A / B / C / D */}
+            {displayOpts.map((opt, idx) => {
+                const isSelected = selectedIdx === idx;
+                return (
+                    <TouchableOpacity
+                        key={idx}
+                        onPress={() => handleOptionClick(idx)}
+                        disabled={isDisabledAll}
+                        activeOpacity={0.7}
+                        style={{
+                            flexDirection: 'row', alignItems: 'center',
+                            paddingVertical: 9, paddingHorizontal: 10,
+                            borderRadius: 10, marginBottom: 6,
+                            backgroundColor: isSelected ? '#ede9fe' : '#f8f8ff',
+                            borderWidth: 1.5,
+                            borderColor: isSelected ? '#7c3aed' : '#d1d5db',
+                        }}
+                    >
+                        <View style={{
+                            width: 22, height: 22, borderRadius: 11,
+                            backgroundColor: isSelected ? '#7c3aed' : '#ede9fe',
+                            alignItems: 'center', justifyContent: 'center', marginRight: 10, flexShrink: 0,
+                        }}>
+                            <Text style={{ fontSize: 11, fontWeight: '700', color: isSelected ? 'white' : '#7c3aed' }}>
+                                {String.fromCharCode(65 + idx)}
+                            </Text>
+                        </View>
+                        <Text style={{ flex: 1, fontSize: 13, lineHeight: 19, color: '#1f2937', fontWeight: isSelected ? '600' : '400' }}>
+                            {opt}
+                        </Text>
+                        {isSelected && <MaterialIcons name="check-circle" size={16} color="#7c3aed" />}
+                    </TouchableOpacity>
+                );
+            })}
+
+            {/* Bottom area: shows selection badge OR free-text input */}
+            <View style={{ marginTop: 4 }}>
+                {selectedIdx !== null ? (
+                    /* Selected option badge + send */
+                    <View style={{
+                        flexDirection: 'row', alignItems: 'center',
+                        backgroundColor: '#f5f3ff', borderWidth: 1.5, borderColor: '#7c3aed',
+                        borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8,
+                    }}>
+                        <MaterialIcons name="check-circle-outline" size={16} color="#7c3aed" style={{ marginRight: 6 }} />
+                        <Text style={{ flex: 1, fontSize: 13, color: '#5b21b6', fontWeight: '500' }} numberOfLines={2}>
+                            {nextLabel}: {displayOpts[selectedIdx]}
+                        </Text>
+                        <TouchableOpacity
+                            onPress={handleSubmit}
+                            disabled={isDisabledAll}
+                            style={{
+                                width: 30, height: 30, borderRadius: 15,
+                                backgroundColor: isDisabledAll ? '#e5e7eb' : '#7c3aed',
+                                alignItems: 'center', justifyContent: 'center', marginLeft: 8,
+                            }}
+                        >
+                            {loading
+                                ? <ActivityIndicator size="small" color="white" />
+                                : <MaterialIcons name="send" size={15} color="white" />
+                            }
+                        </TouchableOpacity>
+                    </View>
+                ) : (
+                    /* Free-text input */
+                    <View style={{
+                        flexDirection: 'row', alignItems: 'center',
+                        backgroundColor: '#fff', borderWidth: 1.5,
+                        borderColor: customText ? '#7c3aed' : '#e5e7eb',
+                        borderRadius: 10, paddingHorizontal: 10, paddingVertical: 5, minHeight: 40,
+                    }}>
+                        <Text style={{ fontSize: 13, fontWeight: '700', color: '#7c3aed', marginRight: 6 }}>
+                            {nextLabel}:
+                        </Text>
+                        <TextInput
+                            style={{ flex: 1, fontSize: 13, color: '#1f2937', paddingVertical: 2 }}
+                            placeholder="câu trả lời của bạn..."
+                            placeholderTextColor="#9ca3af"
+                            value={customText}
+                            onChangeText={handleCustomChange}
+                            editable={!isDisabledAll}
+                            returnKeyType="send"
+                            onSubmitEditing={handleSubmit}
+                            multiline={false}
+                        />
+                        <TouchableOpacity
+                            onPress={handleSubmit}
+                            disabled={!customText.trim() || isDisabledAll}
+                            style={{
+                                width: 28, height: 28, borderRadius: 14,
+                                backgroundColor: customText.trim() && !isDisabledAll ? '#7c3aed' : '#e5e7eb',
+                                alignItems: 'center', justifyContent: 'center', marginLeft: 6,
+                            }}
+                        >
+                            {loading
+                                ? <ActivityIndicator size="small" color="white" />
+                                : <MaterialIcons name="send" size={14} color={customText.trim() && !isDisabledAll ? 'white' : '#9ca3af'} />
+                            }
+                        </TouchableOpacity>
+                    </View>
+                )}
+            </View>
+        </View>
+    );
+}
+
 const BubbleMessageItem = memo(({
     item,
     onLongPressUserMessage,
@@ -38,6 +181,9 @@ const BubbleMessageItem = memo(({
     isSpeaking,
     onStopSpeaking,
     onCitationPress,
+    pendingInterrupt,
+    answerInterrupt,
+    isSending,
 }) => {
     const isUser = item.isUser;
     const isStreaming = !isUser && item.status === 'streaming';
@@ -91,6 +237,7 @@ const BubbleMessageItem = memo(({
     };
 
     const isThisSpeaking = isSpeaking === item.id;
+    const showInterrupt = !isUser && !!pendingInterrupt;
 
     return (
         <TouchableOpacity
@@ -98,7 +245,7 @@ const BubbleMessageItem = memo(({
             onLongPress={handleLongPress}
             style={{ flexDirection: 'row', justifyContent: isUser ? 'flex-end' : 'flex-start', marginBottom: 12, paddingHorizontal: 10 }}
         >
-            <View style={{ alignItems: isUser ? 'flex-end' : 'flex-start', maxWidth: '85%' }}>
+            <View style={{ alignItems: isUser ? 'flex-end' : 'flex-start', maxWidth: showInterrupt ? '95%' : '85%' }}>
                 <LinearGradient
                     colors={isUser ? ['#e7e8e9', '#f9fbff'] : ['#732cc9', '#7840f2', '#5c50da', '#5233f0']}
                     start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
@@ -112,6 +259,16 @@ const BubbleMessageItem = memo(({
                                 <Markdown style={MD_STYLES} rules={mdRules} mergeStyle={false}>
                                     {displayText}
                                 </Markdown>
+
+                                {/* Inline interrupt options + freetext input */}
+                                {showInterrupt && (
+                                    <InlineInterrupt
+                                        pendingInterrupt={pendingInterrupt}
+                                        answerInterrupt={answerInterrupt}
+                                        isSending={isSending}
+                                    />
+                                )}
+
                                 {item.meta?.artifacts?.length > 0 && (
                                     <View style={{ marginTop: 12 }}>
                                         <Text style={{ fontSize: 13, fontWeight: '600', color: '#374151', marginBottom: 8 }}>
@@ -122,7 +279,7 @@ const BubbleMessageItem = memo(({
                                         ))}
                                     </View>
                                 )}
-                                {!isStreaming && (
+                                {!isStreaming && !showInterrupt && (
                                     <TouchableOpacity onPress={handleSpeak} style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, alignSelf: 'flex-start' }}>
                                         <MaterialIcons name={isThisSpeaking ? 'volume-up' : 'volume-off'} size={16} color={isThisSpeaking ? '#2563eb' : '#9ca3af'} />
                                         <Text style={{ fontSize: 11, color: isThisSpeaking ? '#2563eb' : '#9ca3af', marginLeft: 4 }}>

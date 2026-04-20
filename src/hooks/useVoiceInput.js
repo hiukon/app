@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Platform, PermissionsAndroid, Alert } from 'react-native';
+import { Platform, PermissionsAndroid, Alert, Keyboard } from 'react-native';
 import { useSharedValue, useAnimatedStyle, withSpring, withTiming } from 'react-native-reanimated';
 import Voice from '@react-native-voice/voice';
 
@@ -111,6 +111,9 @@ export function useVoiceInput({ onPartialResult, onFinalResult }) {
 
     const startListening = async (currentText = '') => {
         try {
+            // Dismiss keyboard trước để tránh xung đột IME với Voice trên Android
+            Keyboard.dismiss();
+
             if (Platform.OS === 'android') {
                 const granted = await PermissionsAndroid.request(
                     PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,

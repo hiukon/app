@@ -15,6 +15,7 @@ class MessageModel {
         this.timestamp = data.timestamp || new Date();
         this.status = data.status || 'sent';
         this.meta = data.meta || null;
+        this.isInterruptMessage = data.isInterruptMessage || false;
     }
 
     toJSON() {
@@ -25,6 +26,7 @@ class MessageModel {
             timestamp: this.timestamp,
             status: this.status,
             meta: this.meta,
+            isInterruptMessage: this.isInterruptMessage,
         };
     }
 }
