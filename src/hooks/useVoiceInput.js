@@ -9,6 +9,7 @@ export function useVoiceInput({ onPartialResult, onFinalResult }) {
     // Base text trước khi session bắt đầu (set lúc bấm mic)
     const committedTextRef = useRef('');
     const hasVoiceResultRef = useRef(false);
+    const isIgnoreResultsRef = useRef(false);
 
     // Giữ final text chưa commit — chờ xem partial tiếp theo có phải re-emission không
     // { sessionText: string, fullText: string } | null
@@ -43,6 +44,7 @@ export function useVoiceInput({ onPartialResult, onFinalResult }) {
     // Setup listeners CHỈ 1 LẦN
     useEffect(() => {
         Voice.onSpeechStart = () => {
+            isIgnoreResultsRef.current = false;
             setIsListening(true);
             hasVoiceResultRef.current = false;
             pendingFinalRef.current = null;
@@ -58,8 +60,10 @@ export function useVoiceInput({ onPartialResult, onFinalResult }) {
         };
 
         Voice.onSpeechPartialResults = (event) => {
+            if (isIgnoreResultsRef.current) return;
             const partialText = event.value?.[0];
             if (!partialText?.trim()) return;
+            hasVoiceResultRef.current = true;
 
             if (pendingFinalRef.current) {
                 if (partialText === pendingFinalRef.current.sessionText) {
@@ -77,6 +81,7 @@ export function useVoiceInput({ onPartialResult, onFinalResult }) {
         };
 
         Voice.onSpeechResults = (event) => {
+            if (isIgnoreResultsRef.current) return;
             const spokenText = event.value?.[0];
             hasVoiceResultRef.current = true;
             if (!spokenText?.trim()) return;
@@ -92,17 +97,22 @@ export function useVoiceInput({ onPartialResult, onFinalResult }) {
 
         Voice.onSpeechError = (error) => {
             setIsListening(false);
+            if (isIgnoreResultsRef.current) return;
             if (pendingFinalRef.current) {
                 committedTextRef.current = pendingFinalRef.current.fullText;
                 pendingFinalRef.current = null;
             }
             if (hasVoiceResultRef.current) return;
-            const silentCodes = ['7', 'no-speech', '5', 'no-match', '2', '6', 'audio-error'];
+            // '3'=audio-error, '8'=recognizer-busy, '9'=insufficient-permissions (transient startup errors)
+            const silentCodes = ['7', 'no-speech', '5', 'no-match', '2', '6', 'audio-error', '3', '8', '9'];
             const code = error?.error?.code?.toString();
             if (silentCodes.includes(code)) return;
-            Alert.alert('Lỗi nhận dạng giọng nói', error?.error?.message || 'Vui lòng thử lại');
+            // Delay để onSpeechResults kịp fire trước (race condition trên Android)
+            setTimeout(() => {
+                if (hasVoiceResultRef.current) return;
+                Alert.alert('Lỗi nhận dạng giọng nói', error?.error?.message || 'Vui lòng thử lại');
+            }, 400);
         };
-
         return () => {
             Voice.removeAllListeners();
             Voice.destroy().catch(() => { });
@@ -113,7 +123,6 @@ export function useVoiceInput({ onPartialResult, onFinalResult }) {
         try {
             // Dismiss keyboard trước để tránh xung đột IME với Voice trên Android
             Keyboard.dismiss();
-
             if (Platform.OS === 'android') {
                 const granted = await PermissionsAndroid.request(
                     PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
@@ -127,8 +136,8 @@ export function useVoiceInput({ onPartialResult, onFinalResult }) {
             committedTextRef.current = currentText;
             hasVoiceResultRef.current = false;
             pendingFinalRef.current = null;
+            isIgnoreResultsRef.current = false;
             await Voice.start('vi-VN');
-            setIsListening(true);
         } catch (error) {
             setIsListening(false);
             if (error.code === 'E_NO_RECOGNIZER') Alert.alert('Lỗi', 'Thiết bị không hỗ trợ nhận dạng giọng nói');
@@ -136,6 +145,7 @@ export function useVoiceInput({ onPartialResult, onFinalResult }) {
     };
 
     const stopListening = async () => {
+        isIgnoreResultsRef.current = true;
         try { await Voice.stop(); } catch { }
         setIsListening(false);
     };

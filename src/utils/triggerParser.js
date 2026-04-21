@@ -11,8 +11,8 @@ export function removeTriggerTokens(text) {
     // 1. Xóa các trigger tokens dạng <xxx:xxx> (tất cả các dạng)
     cleaned = cleaned.replace(/<[#/@]:[^>]+>/g, '');
 
-    // 1.5. Xóa các ký tự control và invisible characters (lấy chừng)
-    cleaned = cleaned.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+    // 1.5. Xóa các ký tự control và invisible characters (bao gồm zero-width spaces)
+    cleaned = cleaned.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F\u200B-\u200F\u2028\u2029\uFEFF]/g, '');
 
     // 2. Xóa khoảng trắng thừa trong mỗi dòng (GIỮ NGUYÊN dấu xuống dòng \n)
     cleaned = cleaned.replace(/[ \t]+/g, ' ');

@@ -109,10 +109,10 @@ function HorizontalScrollTable({ children }) {
                                     left: thumbLeft,
                                     width: thumbWidth,
                                     height: 8,
-                                    backgroundColor: '#7c3aed',
+                                    backgroundColor: '#6b7280',
                                     borderRadius: 99,
-                                    shadowColor: '#7c3aed',
-                                    shadowOpacity: 0.4,
+                                    shadowColor: '#6b7280',
+                                    shadowOpacity: 0.3,
                                     shadowRadius: 3,
                                     elevation: 2,
                                 }}

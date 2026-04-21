@@ -44,15 +44,16 @@ export const isProcessLine = (line) => {
 
 export const cleanBotText = (text) => {
     if (!text) return null;
-    // Chỉ trả null nếu TOÀN BỘ text là process lines (không có nội dung thật)
     const lines = text.split('\n');
-    const hasRealContent = lines.some(line => {
+    const filtered = lines.filter(line => {
         const trimmed = line.trim();
-        if (!trimmed) return false;
+        if (!trimmed) return true; // giữ dòng trống để giữ ngắt đoạn
         return !isProcessLine(trimmed);
     });
+    const hasRealContent = filtered.some(line => !!line.trim());
     if (!hasRealContent) return null;
-    return text;
+    // Collapse dòng trống liên tiếp (tối đa 1 dòng trống) sau khi lọc
+    return filtered.join('\n').replace(/\n{3,}/g, '\n\n');
 };
 
 export const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

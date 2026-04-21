@@ -223,6 +223,7 @@ const BubbleMessageItem = memo(({
             .replace(/([^\n])\n(\*\*[^*]+\*\*[:\s])/g, '$1\n\n$2')
             .replace(/\n{3,}/g, '\n\n');
         displayText = displayText.replace(/\[\^(\d+)\]/g, (_, n) => `{ref:${n}}`);
+        displayText = displayText.trimEnd();
         if (!displayText.trim()) return null;
     }
 

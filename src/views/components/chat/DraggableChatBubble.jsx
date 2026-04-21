@@ -47,7 +47,11 @@ export default function DraggableChatBubble() {
     const [inputText, setInputText] = useState('');
 
     // ── Voice ─────────────────────────────────────────────────────────────────
-    const handleVoiceText = useCallback((text) => setInputText(text), []);
+    const voiceTextBlockedRef = useRef(false);
+    const handleVoiceText = useCallback((text) => {
+        if (voiceTextBlockedRef.current) return;
+        setInputText(text);
+    }, []);
     const { isListening, startListening, stopListening, ringStyle, committedTextRef } = useVoiceInput({
         onPartialResult: handleVoiceText,
         onFinalResult: handleVoiceText,
@@ -235,18 +239,21 @@ export default function DraggableChatBubble() {
     const handleSendMessage = async () => {
         if (!inputText.trim()) return;
 
-        // Tắt mic nếu đang nghe trước khi gửi
-        if (isListening) await stopListening();
+        voiceTextBlockedRef.current = true;
+        await stopListening();
 
         if (editingMessageId) {
             await resendEditedMessage(editingMessageId, inputText);
             setEditingMessageId(null);
             setInputText('');
+            voiceTextBlockedRef.current = false;
             return;
         }
 
-        // Interrupt is now handled by PendingInterrupt's inline input — skip here
-        if (pendingInterrupt) return;
+        if (pendingInterrupt) {
+            voiceTextBlockedRef.current = false;
+            return;
+        }
 
         let currentMessage = inputText;
         Object.keys(selectedSuggestions).forEach(displayKey => {
@@ -258,6 +265,7 @@ export default function DraggableChatBubble() {
 
         setInputText('');
         committedTextRef.current = '';
+        voiceTextBlockedRef.current = false;
         setSelectedSuggestions({});
         const pending = [...attachments];
         setAttachments([]);
@@ -397,14 +405,14 @@ export default function DraggableChatBubble() {
                         <FlatList
                             ref={flatListRef}
                             data={messages}
-                            keyExtractor={(item, index) => item.id || `msg-${index}`}
+                            keyExtractor={(item, index) => `${item.id || index}${item.status === 'streaming' ? '-s' : ''}`}
                             renderItem={renderMessage}
                             contentContainerStyle={{ padding: 16, flexGrow: 1 }}
                             showsVerticalScrollIndicator={false}
                             initialNumToRender={15}
                             maxToRenderPerBatch={10}
                             windowSize={21}
-                            removeClippedSubviews={true}
+                            removeClippedSubviews={false}
                         />
 
                         <ChatInputArea

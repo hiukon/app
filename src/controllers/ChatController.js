@@ -639,53 +639,28 @@ class ChatController {
                         let rawText = `${cur?.text || ''}`.trim() || `${fallbackText || ''}`.trim();
 
                         // Lọc bỏ log kỹ thuật nhưng giữ nội dung báo cáo
+                        const excludePatterns = [
+                            'tìm kiếm kỹ năng', 'observe the result', 'người dùng muốn biết',
+                            'tìm kiếm thông tin', 'tôi cần tìm kiếm', 'tôi đã tìm kiếm',
+                            'sau khi tìm kiếm', 'tôi sẽ tổng hợp', 'dựa trên kết quả',
+                            'theo hướng dẫn', 'để tôi thử lại', 'tôi đã trả về phản hồi không hợp lệ',
+                            '🔍', '📢', 'cortex',
+                        ];
                         const lines = rawText.split('\n');
                         const filteredLines = lines.filter(line => {
-                            const lowerLine = line.toLowerCase().trim();
-
-                            // Bỏ qua dòng trống hoàn toàn
-                            if (line.trim().length === 0) return false;
-
-                            // Các pattern cần loại bỏ (log kỹ thuật)
-                            const excludePatterns = [
-                                'tìm kiếm kỹ năng',
-                                'observe the result',
-                                'người dùng muốn biết',
-                                'tìm kiếm thông tin',
-                                'tôi cần tìm kiếm',
-                                'tôi đã tìm kiếm',
-                                'sau khi tìm kiếm',
-                                'tôi sẽ tổng hợp',
-                                'dựa trên kết quả',
-                                'theo hướng dẫn',
-                                'để tôi thử lại',
-                                'tôi đã trả về phản hồi không hợp lệ',
-                                '🔍',
-                                '📢',
-                                'cortex',
-                            ];
-
-                            // Nếu dòng chứa pattern cần loại bỏ -> bỏ qua
-                            if (excludePatterns.some(pattern => lowerLine.includes(pattern))) {
-                                return false;
-                            }
-
-                            // Bỏ qua dòng chỉ chứa timestamp
-                            if (lowerLine.match(/^\d{1,2}:\d{2}:\d{2}\s*(am|pm)?$/)) return false;
-                            if (lowerLine.match(/\d{1,2}:\d{2}:\d{2}\s*(am|pm)/i)) return false;
-
-                            // Giữ lại tất cả các dòng khác
+                            const trimmed = line.trim();
+                            if (!trimmed) return true; // giữ dòng trống để giữ paragraph break
+                            const lower = trimmed.toLowerCase();
+                            if (excludePatterns.some(p => lower.includes(p))) return false;
+                            if (/^\d{1,2}:\d{2}:\d{2}\s*(am|pm)?$/i.test(lower)) return false;
                             return true;
                         });
 
-                        let safeText = filteredLines.join('\n').trim();
+                        let safeText = filteredLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 
-                        // Nếu sau khi lọc không còn gì, giữ lại raw text
+                        // Nếu sau khi lọc không còn gì, giữ lại raw text gốc
                         if (!safeText && rawText.length > 0) {
-                            safeText = rawText
-                                .replace(/\d{1,2}:\d{2}:\d{2}\s*(AM|PM)/gi, '')
-                                .replace(/\d{1,2}:\d{2}:\d{2}\s*(am|pm)/gi, '')
-                                .trim();
+                            safeText = rawText.replace(/\d{1,2}:\d{2}:\d{2}\s*(AM|PM)/gi, '').trim();
                         }
 
                         // Lấy artifacts từ event
@@ -734,14 +709,14 @@ class ChatController {
                         (m) => !m.isUser && `${m.text || ''}`.trim().length > 0
                     );
 
-                    if (!hasAssistantText && ev.outcome === 'success') {
+                    if (!hasAssistantText) {
                         const hasAnyArtifact = this.chatModel.getMessages().some(
                             (m) => !m.isUser && m.meta?.artifacts?.length > 0
                         );
 
                         if (!hasAnyArtifact) {
                             this.chatModel.addMessage({
-                                text: 'Run hoàn tất nhưng server không trả về nội dung.',
+                                text: 'Xin lỗi, không nhận được câu trả lời từ hệ thống. Vui lòng thử lại.',
                                 isUser: false,
                                 status: 'error',
                             });
