@@ -2,112 +2,204 @@ import React, { useState, useRef, useCallback } from 'react';
 import { View, Text, PanResponder, TouchableWithoutFeedback, Linking } from 'react-native';
 import { ScrollView } from 'react-native-gesture-handler';
 
-// Unicode circled numbers: ①-⑳ (1-20), ㉑-㉟ (21-35), ㊱-㊿ (36-50)
-export const toCircledNumber = (n) => {
-    const num = Number(n);
-    if (num >= 1 && num <= 20) return String.fromCodePoint(0x245F + num);
-    if (num >= 21 && num <= 35) return String.fromCodePoint(0x323C + num);
-    if (num >= 36 && num <= 50) return String.fromCodePoint(0x328D + num);
-    return `(${n})`;
-};
+export const toCircledNumber = (n) => `[${n}]`;
 
 const TABLE_CELL_WIDTH = 130;
+const TABLE_MAX_HEIGHT = 400;
 
 function HorizontalScrollTable({ children }) {
+    // ── Horizontal state ──────────────────────────────────────────────────────
     const [containerWidth, setContainerWidth] = useState(0);
     const [contentWidth, setContentWidth] = useState(0);
     const [scrollX, setScrollX] = useState(0);
 
-    const scrollViewRef = useRef(null);
+    const hScrollRef = useRef(null);
     const containerWidthRef = useRef(0);
     const contentWidthRef = useRef(0);
     const startScrollXRef = useRef(0);
     const scrollXRef = useRef(0);
 
-    const scrollable = contentWidth > containerWidth + 2;
-    const thumbWidth = scrollable ? Math.max(44, (containerWidth / contentWidth) * containerWidth) : 0;
-    const maxThumbLeft = containerWidth - thumbWidth;
-    const thumbLeft = scrollable
-        ? Math.min((scrollX / (contentWidth - containerWidth)) * maxThumbLeft, maxThumbLeft)
+    const hScrollable = contentWidth > containerWidth + 2;
+    const hThumbWidth = hScrollable ? Math.max(44, (containerWidth / contentWidth) * containerWidth) : 0;
+    const hMaxThumbLeft = containerWidth - hThumbWidth;
+    const hThumbLeft = hScrollable
+        ? Math.min((scrollX / (contentWidth - containerWidth)) * hMaxThumbLeft, hMaxThumbLeft)
         : 0;
 
-    // PanResponder để kéo thumb
-    const panResponder = useRef(
+    // ── Vertical state ────────────────────────────────────────────────────────
+    const [containerHeight, setContainerHeight] = useState(0);
+    const [contentHeight, setContentHeight] = useState(0);
+    const [scrollY, setScrollY] = useState(0);
+
+    const vScrollRef = useRef(null);
+    const containerHeightRef = useRef(0);
+    const contentHeightRef = useRef(0);
+    const startScrollYRef = useRef(0);
+    const scrollYRef = useRef(0);
+
+    const vScrollable = contentHeight > containerHeight + 2;
+    const vThumbHeight = vScrollable ? Math.max(44, (containerHeight / contentHeight) * containerHeight) : 0;
+    const vMaxThumbTop = containerHeight - vThumbHeight;
+    const vThumbTop = vScrollable
+        ? Math.min((scrollY / (contentHeight - containerHeight)) * vMaxThumbTop, vMaxThumbTop)
+        : 0;
+
+    // ── PanResponder — kéo thumb NGANG ───────────────────────────────────────
+    const hPanResponder = useRef(
         PanResponder.create({
             onStartShouldSetPanResponder: () => true,
             onMoveShouldSetPanResponder: () => true,
-            onPanResponderGrant: () => {
-                startScrollXRef.current = scrollXRef.current;
-            },
-            onPanResponderMove: (_, gestureState) => {
+            onPanResponderGrant: () => { startScrollXRef.current = scrollXRef.current; },
+            onPanResponderMove: (_, g) => {
                 const cw = containerWidthRef.current;
                 const tw = contentWidthRef.current;
                 if (!cw || !tw) return;
                 const thumb = Math.max(44, (cw / tw) * cw);
-                const maxLeft = cw - thumb;
-                const dScroll = (gestureState.dx / maxLeft) * (tw - cw);
+                const dScroll = (g.dx / (cw - thumb)) * (tw - cw);
                 const target = Math.max(0, Math.min(startScrollXRef.current + dScroll, tw - cw));
-                scrollViewRef.current?.scrollTo({ x: target, animated: false });
+                hScrollRef.current?.scrollTo({ x: target, animated: false });
             },
         })
     ).current;
 
-    // Tap trên track để nhảy tới vị trí đó
-    const handleTrackPress = useCallback((e) => {
+    // ── PanResponder — kéo thumb DỌC ─────────────────────────────────────────
+    const vPanResponder = useRef(
+        PanResponder.create({
+            onStartShouldSetPanResponder: () => true,
+            onMoveShouldSetPanResponder: () => true,
+            onPanResponderGrant: () => { startScrollYRef.current = scrollYRef.current; },
+            onPanResponderMove: (_, g) => {
+                const ch = containerHeightRef.current;
+                const th = contentHeightRef.current;
+                if (!ch || !th) return;
+                const thumb = Math.max(44, (ch / th) * ch);
+                const dScroll = (g.dy / (ch - thumb)) * (th - ch);
+                const target = Math.max(0, Math.min(startScrollYRef.current + dScroll, th - ch));
+                vScrollRef.current?.scrollTo({ y: target, animated: false });
+            },
+        })
+    ).current;
+
+    // ── Tap track để nhảy vị trí ─────────────────────────────────────────────
+    const handleHTrackPress = useCallback((e) => {
         const tapX = e.nativeEvent.locationX;
         const cw = containerWidthRef.current;
         const tw = contentWidthRef.current;
         if (!cw || !tw) return;
         const thumb = Math.max(44, (cw / tw) * cw);
         const ratio = Math.max(0, Math.min((tapX - thumb / 2) / (cw - thumb), 1));
-        scrollViewRef.current?.scrollTo({ x: ratio * (tw - cw), animated: true });
+        hScrollRef.current?.scrollTo({ x: ratio * (tw - cw), animated: true });
     }, []);
 
-    const onLayout = useCallback(e => {
+    const handleVTrackPress = useCallback((e) => {
+        const tapY = e.nativeEvent.locationY;
+        const ch = containerHeightRef.current;
+        const th = contentHeightRef.current;
+        if (!ch || !th) return;
+        const thumb = Math.max(44, (ch / th) * ch);
+        const ratio = Math.max(0, Math.min((tapY - thumb / 2) / (ch - thumb), 1));
+        vScrollRef.current?.scrollTo({ y: ratio * (th - ch), animated: true });
+    }, []);
+
+    // ── Layout / size / scroll callbacks ─────────────────────────────────────
+    const onHLayout = useCallback(e => {
         const w = e.nativeEvent.layout.width;
         setContainerWidth(w);
         containerWidthRef.current = w;
     }, []);
-
-    const onContentSizeChange = useCallback((w) => {
+    const onHContentSizeChange = useCallback((w) => {
         setContentWidth(w);
         contentWidthRef.current = w;
     }, []);
-
-    const onScroll = useCallback(e => {
-        const { x } = e.nativeEvent.contentOffset;
+    const onHScroll = useCallback(e => {
+        const x = e.nativeEvent.contentOffset.x;
         setScrollX(x);
         scrollXRef.current = x;
     }, []);
 
+    const onVLayout = useCallback(e => {
+        const h = e.nativeEvent.layout.height;
+        setContainerHeight(h);
+        containerHeightRef.current = h;
+    }, []);
+    const onVContentSizeChange = useCallback((_, h) => {
+        setContentHeight(h);
+        contentHeightRef.current = h;
+    }, []);
+    const onVScroll = useCallback(e => {
+        const y = e.nativeEvent.contentOffset.y;
+        setScrollY(y);
+        scrollYRef.current = y;
+    }, []);
+
     return (
         <View style={{ marginVertical: 10 }}>
-            <ScrollView
-                ref={scrollViewRef}
-                horizontal
-                nestedScrollEnabled
-                showsHorizontalScrollIndicator={false}
-                onLayout={onLayout}
-                onContentSizeChange={onContentSizeChange}
-                onScroll={onScroll}
-                scrollEventThrottle={16}
-            >
-                <View style={{ borderWidth: 1, borderColor: '#d1d5db', borderRadius: 8, overflow: 'hidden', backgroundColor: '#ffffff' }}>
-                    {children}
+            <View style={{ flexDirection: 'row' }}>
+                {/* ── Bảng (cuộn dọc bọc cuộn ngang) ───────────────────── */}
+                <View style={{ flex: 1 }}>
+                    <ScrollView
+                        ref={vScrollRef}
+                        nestedScrollEnabled
+                        showsVerticalScrollIndicator={false}
+                        style={{ maxHeight: TABLE_MAX_HEIGHT }}
+                        onLayout={onVLayout}
+                        onContentSizeChange={onVContentSizeChange}
+                        onScroll={onVScroll}
+                        scrollEventThrottle={16}
+                    >
+                        <ScrollView
+                            ref={hScrollRef}
+                            horizontal
+                            nestedScrollEnabled
+                            showsHorizontalScrollIndicator={false}
+                            onLayout={onHLayout}
+                            onContentSizeChange={onHContentSizeChange}
+                            onScroll={onHScroll}
+                            scrollEventThrottle={16}
+                        >
+                            <View style={{ borderWidth: 1, borderColor: '#d1d5db', borderRadius: 8, overflow: 'hidden', backgroundColor: '#ffffff' }}>
+                                {children}
+                            </View>
+                        </ScrollView>
+                    </ScrollView>
                 </View>
-            </ScrollView>
 
-            {scrollable && (
+                {/* ── Thanh cuộn DỌC (bên phải) ─────────────────────────── */}
+                {vScrollable && containerHeight > 0 && (
+                    <View style={{ width: 8, marginLeft: 6, height: containerHeight }}>
+                        <TouchableWithoutFeedback onPress={handleVTrackPress}>
+                            <View style={{ flex: 1, backgroundColor: '#e5e7eb', borderRadius: 99 }}>
+                                <View
+                                    style={{
+                                        position: 'absolute',
+                                        top: vThumbTop,
+                                        width: 8,
+                                        height: vThumbHeight,
+                                        backgroundColor: '#6b7280',
+                                        borderRadius: 99,
+                                        shadowColor: '#6b7280',
+                                        shadowOpacity: 0.3,
+                                        shadowRadius: 3,
+                                        elevation: 2,
+                                    }}
+                                    {...vPanResponder.panHandlers}
+                                />
+                            </View>
+                        </TouchableWithoutFeedback>
+                    </View>
+                )}
+            </View>
+
+            {/* ── Thanh cuộn NGANG (phía dưới) ─────────────────────────────── */}
+            {hScrollable && (
                 <View style={{ marginTop: 8, marginHorizontal: 2 }}>
-                    {/* Track — tap để nhảy vị trí */}
-                    <TouchableWithoutFeedback onPress={handleTrackPress}>
+                    <TouchableWithoutFeedback onPress={handleHTrackPress}>
                         <View style={{ height: 8, backgroundColor: '#e5e7eb', borderRadius: 99, justifyContent: 'center' }}>
-                            {/* Thumb — kéo để scroll */}
                             <View
                                 style={{
                                     position: 'absolute',
-                                    left: thumbLeft,
-                                    width: thumbWidth,
+                                    left: hThumbLeft,
+                                    width: hThumbWidth,
                                     height: 8,
                                     backgroundColor: '#6b7280',
                                     borderRadius: 99,
@@ -116,7 +208,7 @@ function HorizontalScrollTable({ children }) {
                                     shadowRadius: 3,
                                     elevation: 2,
                                 }}
-                                {...panResponder.panHandlers}
+                                {...hPanResponder.panHandlers}
                             />
                         </View>
                     </TouchableWithoutFeedback>
@@ -180,7 +272,7 @@ export const buildMarkdownRules = (citations, onCitationPress) => ({
                 <Text
                     key={`ref-${match.index}`}
                     onPress={() => onCitationPress?.({ passage: passage || null, file: file || null, refId })}
-                    style={{ color: '#2563eb', fontSize: 15 }}
+                    style={{ color: '#2563eb', fontSize: 12, fontWeight: '700' }}
                 >
                     {toCircledNumber(refId)}
                 </Text>

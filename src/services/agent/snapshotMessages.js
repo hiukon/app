@@ -21,6 +21,17 @@ function collapseAssistantTurns(rows) {
             // Citations are a { passages, files } object — take from the last message that has them
             const lastWithCitations = [...pending].reverse().find(m => m.meta?.citations);
             const citations = lastWithCitations?.meta?.citations || null;
+
+            // Preserve earlier messages that look like interrupt questions
+            // (ends with '?' and short enough to be a question, not a long streaming response)
+            for (const msg of pending) {
+                if (msg === lastText) break; // stop before the final message
+                const t = (msg.text || '').trim();
+                if (t.length >= 20 && t.endsWith('?')) {
+                    result.push({ ...msg });
+                }
+            }
+
             const final = { ...lastText };
             if (artifacts.length || citations) {
                 final.meta = {
@@ -41,6 +52,10 @@ function collapseAssistantTurns(rows) {
 
     for (const row of rows) {
         if (row.isUser) {
+            flush();
+            result.push(row);
+        } else if (row.isInterruptMessage) {
+            // Interrupt questions are always kept as standalone items, never collapsed
             flush();
             result.push(row);
         } else {
@@ -81,6 +96,13 @@ export function mapSnapshotToChatRows(messages) {
         if (m.role === 'assistant') {
             // Case 1: Assistant with content text
             if (typeof m.content === 'string' && m.content.trim()) {
+                // Detect interrupt question messages via backend metadata
+                const isInterrupt = !!(
+                    m.metadata?.is_interrupt ||
+                    m.metadata?.interrupt_id ||
+                    m.metadata?.type === 'interrupt' ||
+                    Array.isArray(m.metadata?.options)
+                );
                 rows.push({
                     id,
                     text: m.content,
@@ -88,6 +110,7 @@ export function mapSnapshotToChatRows(messages) {
                     timestamp,
                     status: 'sent',
                     meta: m.metadata || null,
+                    ...(isInterrupt ? { isInterruptMessage: true } : {}),
                 });
                 continue;
             }

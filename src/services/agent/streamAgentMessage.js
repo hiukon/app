@@ -76,6 +76,7 @@ export function streamAgentMessage({
             if (timeoutId) clearTimeout(timeoutId);  // ✅ Clear timeout
 
             const full = xhr.responseText || '';
+
             const chunk = full.slice(processed);
             processed = full.length;
             const fromChunk = parser.push(chunk);
@@ -96,6 +97,21 @@ export function streamAgentMessage({
                 err.body = full;
                 finish(err);
                 return;
+            }
+
+            // Detect application-level errors returned as HTTP 200 with JSON body
+            if (full && !full.trimStart().startsWith('data:')) {
+                try {
+                    const j = JSON.parse(full);
+                    if (j.code && j.code >= 400) {
+                        const msg = j.msg || j.message || j.error || `Application error ${j.code}`;
+                        const err = new Error(msg);
+                        err.status = j.code;
+                        err.body = full;
+                        finish(err);
+                        return;
+                    }
+                } catch { /* not JSON — ignore */ }
             }
             try {
                 onComplete?.();

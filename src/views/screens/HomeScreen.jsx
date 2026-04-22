@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
     View,
     Text,
@@ -65,6 +65,7 @@ export default function HomeScreen() {
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [loginModalVisible, setLoginModalVisible] = useState(false);
+    const loginModalShownRef = useRef(false);
     const [selectedMonth, setSelectedMonth] = useState(() => new Date());
     const [selectedMonthAssign, setSelectedMonthAssign] = useState(() => new Date());
     const { scale, isTablet, isSmall, isLandscape, width } = useResponsive();
@@ -73,6 +74,11 @@ export default function HomeScreen() {
     const statColumns = isTablet ? (isLandscape ? 4 : 3) : (isSmall ? 1 : (isLandscape ? 3 : 2));
     const statContainerWidth = Math.max(width - (statSectionPadding * 2), 1);
     const statCardWidth = (statContainerWidth - (statGap * (statColumns - 1))) / statColumns;
+
+    // Reset flag when user logs in so modal can show again if they log out later
+    useEffect(() => {
+        if (user) loginModalShownRef.current = false;
+    }, [user]);
 
     useEffect(() => {
         if (authLoading) return;
@@ -84,12 +90,22 @@ export default function HomeScreen() {
         loadAssignTasksData();
     }, [selectedMonthAssign, user?.email, authLoading]);
 
+    const showLoginModalOnce = () => {
+        if (loginModalShownRef.current) return;
+        loginModalShownRef.current = true;
+        setLoginModalVisible(true);
+    };
+
     const loadReceiveTasks = async () => {
         if (authLoading) return;
         try {
             setLoading(true);
             const monthKey = monthKeyFromDate(selectedMonth);
             const statRes = await StatController.loadStatistics({ monthKey });
+
+            if (!statRes.success && statRes.error?.includes('Missing access token')) {
+                showLoginModalOnce();
+            }
 
             const fallbackStats = TASK_UNITS.map((name, i) => ({
                 id: String(i + 1),
@@ -135,9 +151,8 @@ export default function HomeScreen() {
                 color: '#10b981',
             }));
 
-            // ✅ Kiểm tra lỗi Missing access token
-            if (!assignRes.success && assignRes.error && assignRes.error.includes('Missing access token')) {
-                setLoginModalVisible(true);
+            if (!assignRes.success && assignRes.error?.includes('Missing access token')) {
+                showLoginModalOnce();
             }
 
             if (assignRes.success && Array.isArray(assignRes.data) && assignRes.data.length > 0) {
@@ -190,13 +205,11 @@ export default function HomeScreen() {
                 color: '#10b981',
             }));
 
-            // ✅ Kiểm tra lỗi Missing access token
-            if (!statRes.success && statRes.error && statRes.error.includes('Missing access token')) {
-                setLoginModalVisible(true);
+            if (!statRes.success && statRes.error?.includes('Missing access token')) {
+                showLoginModalOnce();
             }
-
-            if (!assignRes.success && assignRes.error && assignRes.error.includes('Missing access token')) {
-                setLoginModalVisible(true);
+            if (!assignRes.success && assignRes.error?.includes('Missing access token')) {
+                showLoginModalOnce();
             }
 
             // Always keep mission boxes visible: failure OR empty success -> fallback boxes.

@@ -4,7 +4,6 @@ import {
     Text,
     TouchableOpacity,
     FlatList,
-    Modal,
     ActivityIndicator,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -21,6 +20,8 @@ export default function SuggestionModal({
     emptyMessage = 'Không tìm thấy',
 }) {
     const { scale } = useResponsive();
+
+    if (!visible) return null;
 
     const renderItem = ({ item }) => (
         <TouchableOpacity
@@ -61,13 +62,15 @@ export default function SuggestionModal({
     );
 
     return (
-        <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+        <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 100 }}>
             <TouchableOpacity
-                style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)' }}
+                style={{ flex: 1 }}
                 activeOpacity={1}
                 onPress={onClose}
-            >
-                <View style={{
+            />
+            <View
+                onStartShouldSetResponder={() => true}
+                style={{
                     position: 'absolute',
                     bottom: 100,
                     left: 16,
@@ -80,38 +83,38 @@ export default function SuggestionModal({
                     shadowOpacity: 0.25,
                     shadowRadius: 8,
                     elevation: 5,
+                }}
+            >
+                <View style={{
+                    padding: 12,
+                    borderBottomWidth: 1,
+                    borderBottomColor: '#e5e7eb',
+                    flexDirection: 'row',
+                    alignItems: 'center',
                 }}>
-                    <View style={{
-                        padding: 12,
-                        borderBottomWidth: 1,
-                        borderBottomColor: '#e5e7eb',
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                    }}>
-                        <MaterialIcons name={icon || 'info'} size={18} color="#6b7280" />
-                        <Text style={{ marginLeft: 8, fontSize: 12, color: '#6b7280' }}>
-                            {title}
-                        </Text>
-                    </View>
-                    {loading ? (
-                        <View style={{ padding: 20, alignItems: 'center' }}>
-                            <ActivityIndicator size="small" color="#2563eb" />
-                            <Text style={{ marginTop: 8, color: '#9ca3af' }}>Đang tải...</Text>
-                        </View>
-                    ) : data.length === 0 ? (
-                        <View style={{ padding: 20, alignItems: 'center' }}>
-                            <Text style={{ color: '#9ca3af' }}>{emptyMessage}</Text>
-                        </View>
-                    ) : (
-                        <FlatList
-                            data={data}
-                            keyExtractor={(item) => item.id}
-                            renderItem={renderItem}
-                            showsVerticalScrollIndicator={false}
-                        />
-                    )}
+                    <MaterialIcons name={icon || 'info'} size={18} color="#6b7280" />
+                    <Text style={{ marginLeft: 8, fontSize: 12, color: '#6b7280' }}>
+                        {title}
+                    </Text>
                 </View>
-            </TouchableOpacity>
-        </Modal>
+                {loading ? (
+                    <View style={{ padding: 20, alignItems: 'center' }}>
+                        <ActivityIndicator size="small" color="#2563eb" />
+                        <Text style={{ marginTop: 8, color: '#9ca3af' }}>Đang tải...</Text>
+                    </View>
+                ) : data.length === 0 ? (
+                    <View style={{ padding: 20, alignItems: 'center' }}>
+                        <Text style={{ color: '#9ca3af' }}>{emptyMessage}</Text>
+                    </View>
+                ) : (
+                    <FlatList
+                        data={data}
+                        keyExtractor={(item) => item.id}
+                        renderItem={renderItem}
+                        showsVerticalScrollIndicator={false}
+                    />
+                )}
+            </View>
+        </View>
     );
 }

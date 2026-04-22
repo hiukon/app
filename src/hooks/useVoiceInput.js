@@ -108,10 +108,6 @@ export function useVoiceInput({ onPartialResult, onFinalResult }) {
             const code = error?.error?.code?.toString();
             if (silentCodes.includes(code)) return;
             // Delay để onSpeechResults kịp fire trước (race condition trên Android)
-            setTimeout(() => {
-                if (hasVoiceResultRef.current) return;
-                Alert.alert('Lỗi nhận dạng giọng nói', error?.error?.message || 'Vui lòng thử lại');
-            }, 400);
         };
         return () => {
             Voice.removeAllListeners();

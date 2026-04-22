@@ -1,4 +1,4 @@
-import React, { memo, useMemo, useState } from 'react';
+import React, { memo, useMemo, useState, useRef } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, TextInput } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -29,45 +29,78 @@ const MD_STYLES = {
 };
 
 // Inline interrupt UI embedded inside the bot bubble
-function InlineInterrupt({ pendingInterrupt, answerInterrupt, isSending }) {
-    const [selectedIdx, setSelectedIdx] = useState(null); // which option is highlighted
-    const [customText, setCustomText] = useState('');     // free-text typed by user
+function InlineInterrupt({ pendingInterrupt, answerInterrupt, isSending, isHistorical = false }) {
+    const [selectedIndices, setSelectedIndices] = useState([]);
+    const [customText, setCustomText] = useState('');
     const [loading, setLoading] = useState(false);
+    // Ref-based lock prevents double-submission on iOS where React state
+    // may not re-render fast enough between two rapid taps
+    const submittingRef = useRef(false);
 
     const opts = (pendingInterrupt.options || []).filter(o => o?.trim());
     const isApproval = ['human_approval', 'database_modification', 'multi_step_confirm', 'error_recovery']
         .includes(pendingInterrupt.reason);
     const displayOpts = opts.length > 0 ? opts : (isApproval ? ['Đồng ý', 'Từ chối'] : []);
-    const isDisabledAll = isSending || loading;
     const nextLabel = String.fromCharCode(65 + displayOpts.length);
 
-    // Resolved value to submit: selected option text OR custom text
-    const selectedText = selectedIdx !== null ? displayOpts[selectedIdx] : '';
-    const submitValue = (selectedText || customText).trim();
+    const selectedTexts = selectedIndices.map(idx => displayOpts[idx]).filter(Boolean);
+    const submitValue = selectedTexts.length > 0
+        ? selectedTexts.join(', ')
+        : customText.trim();
 
     const handleOptionClick = (idx) => {
-        if (isDisabledAll) return;
-        setSelectedIdx(idx);
-        setCustomText(''); // clear custom input when option chosen
+        setSelectedIndices(prev =>
+            prev.includes(idx)
+                ? prev.filter(i => i !== idx)
+                : [...prev, idx]
+        );
+        setCustomText('');
     };
 
     const handleCustomChange = (t) => {
         setCustomText(t);
-        setSelectedIdx(null); // deselect option when typing custom
+        setSelectedIndices([]);
     };
 
     const handleSubmit = async () => {
-        if (!submitValue || isDisabledAll) return;
+        console.log('🔘 INLINE INTERRUPT - Submit button pressed', {
+            submitValue,
+            isSending,
+            loading,
+            submitting: submittingRef.current,
+            hasCallback: !!answerInterrupt
+        });
+        if (!submitValue || isSending || loading || submittingRef.current || !answerInterrupt) {
+            console.log('🔘 INLINE INTERRUPT - Early return:', {
+                emptyValue: !submitValue,
+                isSending,
+                loading,
+                submitting: submittingRef.current,
+                noCallback: !answerInterrupt,
+            });
+            return;
+        }
+        submittingRef.current = true;
         setLoading(true);
-        await answerInterrupt(submitValue);
-        setLoading(false);
+        console.log('🔘 INLINE INTERRUPT - Calling answerInterrupt with:', submitValue);
+        try {
+            await answerInterrupt(submitValue);
+            console.log('🔘 INLINE INTERRUPT - Success');
+        } catch (err) {
+            console.error('🔘 INLINE INTERRUPT - Error:', err);
+        } finally {
+            submittingRef.current = false;
+            setLoading(false);
+        }
     };
+
+    const isDisabledAll = isSending || loading;
 
     return (
         <View style={{ marginTop: 10, borderTopWidth: 1, borderTopColor: '#f0f0f0', paddingTop: 10 }}>
             {/* Options A / B / C / D */}
             {displayOpts.map((opt, idx) => {
-                const isSelected = selectedIdx === idx;
+                const isSelected = selectedIndices.includes(idx);
                 return (
                     <TouchableOpacity
                         key={idx}
@@ -100,10 +133,10 @@ function InlineInterrupt({ pendingInterrupt, answerInterrupt, isSending }) {
                 );
             })}
 
-            {/* Bottom area: shows selection badge OR free-text input */}
+            {/* Bottom area: shows selected options badge OR free-text input */}
             <View style={{ marginTop: 4 }}>
-                {selectedIdx !== null ? (
-                    /* Selected option badge + send */
+                {selectedIndices.length > 0 ? (
+                    /* Selected options badge + send */
                     <View style={{
                         flexDirection: 'row', alignItems: 'center',
                         backgroundColor: '#f5f3ff', borderWidth: 1.5, borderColor: '#7c3aed',
@@ -111,7 +144,7 @@ function InlineInterrupt({ pendingInterrupt, answerInterrupt, isSending }) {
                     }}>
                         <MaterialIcons name="check-circle-outline" size={16} color="#7c3aed" style={{ marginRight: 6 }} />
                         <Text style={{ flex: 1, fontSize: 13, color: '#5b21b6', fontWeight: '500' }} numberOfLines={2}>
-                            {nextLabel}: {displayOpts[selectedIdx]}
+                            {selectedIndices.map(idx => String.fromCharCode(65 + idx)).join(', ')}: {selectedTexts.join(', ')}
                         </Text>
                         <TouchableOpacity
                             onPress={handleSubmit}
@@ -161,7 +194,7 @@ function InlineInterrupt({ pendingInterrupt, answerInterrupt, isSending }) {
                         >
                             {loading
                                 ? <ActivityIndicator size="small" color="white" />
-                                : <MaterialIcons name="send" size={14} color={customText.trim() && !isDisabledAll ? 'white' : '#9ca3af'} />
+                                : <MaterialIcons name="send" size={14} color={customText.trim() && !isDisabledAll && !isHistorical ? 'white' : '#9ca3af'} />
                             }
                         </TouchableOpacity>
                     </View>
@@ -238,7 +271,24 @@ const BubbleMessageItem = memo(({
     };
 
     const isThisSpeaking = isSpeaking === item.id;
-    const showInterrupt = !isUser && !!pendingInterrupt;
+
+    // Check for interrupt data from multiple sources:
+    // 1. pendingInterrupt prop (active interrupt)
+    // 2. item.meta?.interruptData (from cache with full interrupt data)
+    // 3. item.meta?.interrupt_payload (from server snapshot with options in payload)
+    // 4. item.meta?.options (fallback for other structures)
+    const interruptData = pendingInterrupt || item.meta?.interruptData ||
+        (item.meta?.interrupt_payload && {
+            question: item.meta.interrupt_payload.question || item.text,
+            options: item.meta.interrupt_payload.options || [],
+            reason: item.meta.interrupt_payload.reason || 'information_gathering',
+        }) ||
+        (item.meta?.options && {
+            question: item.text,
+            options: item.meta.options,
+            reason: item.meta?.reason || 'information_gathering',
+        });
+    const showInterrupt = !isUser && !!interruptData;
 
     return (
         <TouchableOpacity
@@ -262,11 +312,16 @@ const BubbleMessageItem = memo(({
                                 </Markdown>
 
                                 {/* Inline interrupt options + freetext input */}
-                                {showInterrupt && (
+                                {showInterrupt && interruptData && (
                                     <InlineInterrupt
-                                        pendingInterrupt={pendingInterrupt}
-                                        answerInterrupt={answerInterrupt}
+                                        pendingInterrupt={interruptData}
+                                        answerInterrupt={
+                                            pendingInterrupt
+                                                ? answerInterrupt
+                                                : (value) => answerInterrupt(value, interruptData)
+                                        }
                                         isSending={isSending}
+                                        isHistorical={!pendingInterrupt}
                                     />
                                 )}
 

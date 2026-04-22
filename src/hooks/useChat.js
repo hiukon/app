@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useRef } from 'react';
 import ChatController from '../controllers/ChatController';
 
 export function useChat() {
@@ -8,6 +8,10 @@ export function useChat() {
     const [pendingInterrupt, setPendingInterrupt] = useState(() =>
         chatController.getPendingInterrupt?.() || null
     );
+    // Generation counter — incremented whenever a new async operation takes ownership.
+    // Any in-flight sendMessage/openConversation whose gen no longer matches will not
+    // reset isSending when it eventually finishes, preventing race conditions.
+    const sendGenRef = useRef(0);
     const [conversations, setConversations] = useState([]);
 
     // ✅ HÀM LỌC MESSAGE - CHỈ HIỂN THỊ KẾT QUẢ
@@ -164,29 +168,31 @@ export function useChat() {
 
     const sendMessage = async (text, options = {}) => {
         if (!text?.trim()) return { messages };
+        const gen = ++sendGenRef.current;
         setIsSending(true);
         try {
             const bump = () => {
-                updateFilteredMessages();  // ✅ DÙNG HÀM MỚI
+                updateFilteredMessages();
                 setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
             };
             const result = await chatController.sendUserMessage(text.trim(), bump, options);
-            updateFilteredMessages();  // ✅ DÙNG HÀM MỚI
+            updateFilteredMessages();
             setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
             return result;
         } finally {
-            setIsSending(false);
+            if (sendGenRef.current === gen) setIsSending(false);
         }
     };
 
     const cancel = async () => {
+        sendGenRef.current++;
         const bump = () => {
-            updateFilteredMessages();  // ✅ DÙNG HÀM MỚI
+            updateFilteredMessages();
             setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
         };
         await chatController.cancelCurrentRun(bump);
         setIsSending(false);
-        updateFilteredMessages();  // ✅ DÙNG HÀM MỚI
+        updateFilteredMessages();
         setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
     };
 
@@ -200,47 +206,55 @@ export function useChat() {
     const resendEditedMessage = async (messageId, newText) => {
         const edited = chatController.editAndPruneFromMessage(messageId, newText);
         if (!edited.success) {
-            updateFilteredMessages();  // ✅ DÙNG HÀM MỚI
+            updateFilteredMessages();
             return edited;
         }
+        const gen = ++sendGenRef.current;
         setIsSending(true);
         try {
             const bump = () => {
-                updateFilteredMessages();  // ✅ DÙNG HÀM MỚI
+                updateFilteredMessages();
                 setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
             };
             const result = await chatController.sendUserMessage(newText.trim(), bump, {
                 skipUserMessage: true,
             });
-            updateFilteredMessages();  // ✅ DÙNG HÀM MỚI
+            updateFilteredMessages();
             setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
             return { success: true, result };
         } finally {
-            setIsSending(false);
+            if (sendGenRef.current === gen) setIsSending(false);
         }
     };
 
-    const answerInterrupt = async (input) => {
+    const answerInterrupt = async (input, storedInterruptData = null) => {
+        const gen = ++sendGenRef.current;
         setIsSending(true);
 
-        // Xóa pendingInterrupt khỏi UI ngay (lựa chọn đã hiển thị trong InlineInterrupt)
-        setPendingInterrupt(null);
-
         try {
-
             const bump = () => {
                 updateFilteredMessages();
                 setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
             };
 
-                const intr = chatController.getPendingInterrupt?.() || null;
+            const isHistorical = !chatController.getPendingInterrupt?.() && !!storedInterruptData;
+
+            if (isHistorical) {
+                // Re-select after already getting a response: remove old result, send as new message
+                chatController.pruneAfterInterruptSelection();
+                updateFilteredMessages();
+                const result = await chatController.sendUserMessage(input.trim(), bump);
+                updateFilteredMessages();
+                setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
+                return result;
+            }
+
+            const intr = chatController.getPendingInterrupt?.() || null;
             const payload = toInterruptPayload(intr, input);
             const out = await chatController.resumeAgentInterrupt(payload, bump);
-
             updateFilteredMessages();
             setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
             return out;
-
         } catch (error) {
             chatController.chatModel?.addMessage?.({
                 text: `❌ Có lỗi xử lý: ${error.message}. Vui lòng thử lại.`,
@@ -249,7 +263,7 @@ export function useChat() {
             });
             updateFilteredMessages();
         } finally {
-            setIsSending(false);
+            if (sendGenRef.current === gen) setIsSending(false);
         }
     };
 
@@ -265,18 +279,20 @@ export function useChat() {
     };
 
     const openConversation = async (conversationId) => {
+        // Invalidate any in-flight sendMessage so its finally won't race with us
+        const gen = ++sendGenRef.current;
         setIsSending(true);
         try {
             const bump = () => {
-                updateFilteredMessages();  // ✅ DÙNG HÀM MỚI
+                updateFilteredMessages();
                 setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
             };
             const out = await chatController.openConversation(conversationId, bump);
-            updateFilteredMessages();  // ✅ DÙNG HÀM MỚI
+            updateFilteredMessages();
             setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
             return out;
         } finally {
-            setIsSending(false);
+            if (sendGenRef.current === gen) setIsSending(false);
         }
     };
 
@@ -290,9 +306,12 @@ export function useChat() {
     };
 
     const newConversation = () => {
+        // Abort ongoing stream and prevent its finally from racing
+        sendGenRef.current++;
         const out = chatController.startNewConversation();
-        updateFilteredMessages();  // ✅ DÙNG HÀM MỚI
-        setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
+        setIsSending(false);
+        updateFilteredMessages();
+        setPendingInterrupt(null);
         return out;
     };
 

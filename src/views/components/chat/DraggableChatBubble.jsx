@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
-import { View, Text, TouchableOpacity, Modal, FlatList, SafeAreaView, ImageBackground, Image } from 'react-native';
+import { View, Text, TouchableOpacity, Modal, FlatList, SafeAreaView, KeyboardAvoidingView, Platform, ImageBackground, Image } from 'react-native';
 import { PanGestureHandler, State } from 'react-native-gesture-handler';
 import Animated, { useSharedValue, useAnimatedStyle, withSpring } from 'react-native-reanimated';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -19,6 +19,7 @@ import SuggestionModal from './SuggestionModal';
 import BubbleMessageItem from './BubbleMessageItem';
 import HistoryModal from './HistoryModal';
 import CitationModal from './CitationModal';
+import PendingInterrupt from './PendingInterrupt';
 import ChatInputArea from './ChatInputArea';
 import botBubbleBg from '../../../assets/images/TUHN3.jpg';
 import chatIcon from '../../../assets/images/chatbot.png';
@@ -237,7 +238,7 @@ export default function DraggableChatBubble() {
     };
 
     const handleSendMessage = async () => {
-        if (!inputText.trim()) return;
+        if (!inputText.trim() || isSending) return;
 
         voiceTextBlockedRef.current = true;
         await stopListening();
@@ -312,7 +313,10 @@ export default function DraggableChatBubble() {
     }, [messages, pendingInterrupt]);
 
     const renderMessage = useCallback(({ item }) => {
-        const isLastBot = !item.isUser && item.id === interruptMessageId && !!pendingInterrupt;
+        // Check if this message is an interrupt question (has isInterruptMessage flag or matches interruptMessageId)
+        const isInterruptMessage = !item.isUser && (item.isInterruptMessage || item.id === interruptMessageId);
+        const isLastBot = isInterruptMessage && !!pendingInterrupt;
+
         return (
             <BubbleMessageItem
                 item={item}
@@ -324,8 +328,8 @@ export default function DraggableChatBubble() {
                 isSpeaking={speakingMessageId}
                 onStopSpeaking={stopSpeaking}
                 onCitationPress={handleCitationPress}
-                pendingInterrupt={isLastBot ? pendingInterrupt : null}
-                answerInterrupt={isLastBot ? answerInterrupt : null}
+                pendingInterrupt={isLastBot ? pendingInterrupt : (isInterruptMessage ? null : null)}
+                answerInterrupt={isInterruptMessage ? answerInterrupt : null}
                 isSending={isSending}
             />
         );
@@ -358,10 +362,8 @@ export default function DraggableChatBubble() {
         );
     }, [domainIdToCodeMap, domainCodeToIdMap, openConversation, deleteConversation]);
 
-    // ── Render ────────────────────────────────────────────────────────────────
     return (
         <>
-            {/* Floating bubble */}
             <PanGestureHandler onGestureEvent={onGestureEvent} onHandlerStateChange={onHandlerStateChange}>
                 <Animated.View style={[{ position: 'absolute', bottom: scale(92), right: scale(20), zIndex: 1000, elevation: 20 }, animatedStyle]}>
                     <TouchableOpacity
@@ -378,61 +380,66 @@ export default function DraggableChatBubble() {
                 <ImageBackground source={botBubbleBg} style={{ flex: 1 }} resizeMode="cover">
                     <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)' }} />
                     <SafeAreaView style={{ flex: 1, backgroundColor: 'transparent', overflow: 'hidden' }}>
-                        {/* Header */}
-                        <LinearGradient
-                            colors={['#732cc9', '#7840f2', '#5c50da', '#5233f0']}
-                            start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
-                            style={{ padding: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}
+                        <KeyboardAvoidingView
+                            style={{ flex: 1 }}
+                            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
                         >
-                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                <Image source={chatIcon} style={{ width: 24, height: 24, tintColor: 'white' }} />
-                                <Text style={{ color: 'white', fontSize: 18, fontWeight: 'bold', marginLeft: 8 }}>AI HaNoiBrain</Text>
-                            </View>
-                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                <TouchableOpacity onPress={() => { newConversation(); setInputText(''); }} style={{ marginRight: 12 }}>
-                                    <MaterialIcons name="add-comment" size={24} color="white" />
-                                </TouchableOpacity>
-                                <TouchableOpacity onPress={openHistory} style={{ marginRight: 12 }}>
-                                    <MaterialIcons name="history" size={24} color="white" />
-                                </TouchableOpacity>
-                                <TouchableOpacity onPress={() => { newConversation(); setInputText(''); setModalVisible(false); setSelectedSuggestions({}); }}>
-                                    <MaterialIcons name="close" size={24} color="white" />
-                                </TouchableOpacity>
-                            </View>
-                        </LinearGradient>
+                            {/* Header */}
+                            <LinearGradient
+                                colors={['#732cc9', '#7840f2', '#5c50da', '#5233f0']}
+                                start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+                                style={{ padding: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}
+                            >
+                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                    <Image source={chatIcon} style={{ width: 24, height: 24, tintColor: 'white' }} />
+                                    <Text style={{ color: 'white', fontSize: 18, fontWeight: 'bold', marginLeft: 8 }}>AI HaNoiBrain</Text>
+                                </View>
+                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                    <TouchableOpacity onPress={() => { newConversation(); setInputText(''); }} style={{ marginRight: 12 }}>
+                                        <MaterialIcons name="add-comment" size={24} color="white" />
+                                    </TouchableOpacity>
+                                    <TouchableOpacity onPress={openHistory} style={{ marginRight: 12 }}>
+                                        <MaterialIcons name="history" size={24} color="white" />
+                                    </TouchableOpacity>
+                                    <TouchableOpacity onPress={() => { newConversation(); setInputText(''); setModalVisible(false); setSelectedSuggestions({}); }}>
+                                        <MaterialIcons name="close" size={24} color="white" />
+                                    </TouchableOpacity>
+                                </View>
+                            </LinearGradient>
 
-                        {/* Messages */}
-                        <FlatList
-                            ref={flatListRef}
-                            data={messages}
-                            keyExtractor={(item, index) => `${item.id || index}${item.status === 'streaming' ? '-s' : ''}`}
-                            renderItem={renderMessage}
-                            contentContainerStyle={{ padding: 16, flexGrow: 1 }}
-                            showsVerticalScrollIndicator={false}
-                            initialNumToRender={15}
-                            maxToRenderPerBatch={10}
-                            windowSize={21}
-                            removeClippedSubviews={false}
-                        />
+                            {/* Messages */}
+                            <FlatList
+                                ref={flatListRef}
+                                data={messages}
+                                keyExtractor={(item, index) => `${item.id || index}${item.status === 'streaming' ? '-s' : ''}`}
+                                renderItem={renderMessage}
+                                contentContainerStyle={{ padding: 16, flexGrow: 1 }}
+                                showsVerticalScrollIndicator={false}
+                                initialNumToRender={15}
+                                maxToRenderPerBatch={10}
+                                windowSize={21}
+                                removeClippedSubviews={false}
+                            />
 
-                        <ChatInputArea
-                            inputText={inputText}
-                            onChangeText={handleTextChange}
-                            onSelectionChange={(e) => setCursorPosition(e.nativeEvent.selection.start)}
-                            editingMessageId={editingMessageId}
-                            pendingInterrupt={pendingInterrupt}
-                            isListening={isListening}
-                            isUploading={isUploading}
-                            isSending={isSending}
-                            selectedModel={selectedModel}
-                            attachments={attachments}
-                            ringStyle={ringStyle}
-                            onPickFile={pickFile}
-                            onToggleVoice={() => isListening ? stopListening() : startListening(inputText)}
-                            onToggleModelPicker={() => setShowModelPicker(true)}
-                            onSend={handleSendMessage}
-                            onCancel={cancel}
-                        />
+                            <ChatInputArea
+                                inputText={inputText}
+                                onChangeText={handleTextChange}
+                                onSelectionChange={(e) => setCursorPosition(e.nativeEvent.selection.start)}
+                                editingMessageId={editingMessageId}
+                                pendingInterrupt={pendingInterrupt}
+                                isListening={isListening}
+                                isUploading={isUploading}
+                                isSending={isSending}
+                                selectedModel={selectedModel}
+                                attachments={attachments}
+                                ringStyle={ringStyle}
+                                onPickFile={pickFile}
+                                onToggleVoice={() => isListening ? stopListening() : startListening(inputText)}
+                                onToggleModelPicker={() => setShowModelPicker(true)}
+                                onSend={handleSendMessage}
+                                onCancel={cancel}
+                            />
+                        </KeyboardAvoidingView>
                     </SafeAreaView>
 
                     <HistoryModal
@@ -444,28 +451,28 @@ export default function DraggableChatBubble() {
                         onRefresh={onRefresh}
                         renderHistoryItem={renderHistoryItem}
                     />
+
+                    <SuggestionModal
+                        visible={showSuggestion}
+                        onClose={() => { setShowSuggestion(false); setSuggestionType(null); }}
+                        onSelect={handleSelectSuggestion}
+                        data={suggestionData}
+                        loading={loadingSuggestions}
+                        title={suggestionType === 'skill' ? 'Chọn kỹ năng' : 'Chọn thư mục/tài liệu'}
+                        icon={suggestionType === 'skill' ? 'bolt' : 'folder-open'}
+                        emptyMessage="Không tìm thấy kết quả"
+                    />
+
+                    <ModelPickerModal
+                        visible={showModelPicker}
+                        selectedModel={selectedModel}
+                        onSelectModel={setSelectedModel}
+                        onClose={() => setShowModelPicker(false)}
+                    />
+
+                    <CitationModal citationModal={citationModal} onClose={() => setCitationModal(null)} />
                 </ImageBackground>
             </Modal>
-
-            <SuggestionModal
-                visible={showSuggestion}
-                onClose={() => { setShowSuggestion(false); setSuggestionType(null); }}
-                onSelect={handleSelectSuggestion}
-                data={suggestionData}
-                loading={loadingSuggestions}
-                title={suggestionType === 'skill' ? 'Chọn kỹ năng' : 'Chọn thư mục/tài liệu'}
-                icon={suggestionType === 'skill' ? 'bolt' : 'folder-open'}
-                emptyMessage="Không tìm thấy kết quả"
-            />
-
-            <ModelPickerModal
-                visible={showModelPicker}
-                selectedModel={selectedModel}
-                onSelectModel={setSelectedModel}
-                onClose={() => setShowModelPicker(false)}
-            />
-
-            <CitationModal citationModal={citationModal} onClose={() => setCitationModal(null)} />
         </>
     );
 }
