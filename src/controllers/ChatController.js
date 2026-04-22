@@ -67,6 +67,7 @@ class ChatController {
         this._toolCalls = new Map();
         this._currentAssistantId = null;
         this._resumeInterruptContext = null;
+        this._bgStreams = new Map();
     }
 
     _cleanupEmptyStreamingAssistants() {
@@ -103,17 +104,45 @@ class ChatController {
         onMessagesUpdate?.();
     }
 
+    // After loading a snapshot into chatModel, set answered/pending state for each interrupt message.
+    // If there is any response (user or bot) after the interrupt → mark it answered (client-side flag).
+    // If no response follows → treat it as still pending and restore pendingInterrupt.
+    _applyInterruptStateFromRows(rows) {
+        this.pendingInterrupt = null;
+        for (let i = 0; i < rows.length; i++) {
+            if (!rows[i].isInterruptMessage) continue;
+            const hasAnswerAfter = rows.slice(i + 1).some(
+                r => r.isUser || (!r.isUser && !r.isInterruptMessage && `${r.text || ''}`.trim())
+            );
+            const msg = this.chatModel.getMessages().find(m => m.id === rows[i].id);
+            if (hasAnswerAfter) {
+                if (msg) this.chatModel.updateMessage(rows[i].id, { meta: { ...(msg.meta || {}), answered: true } });
+            } else if (rows[i].meta?.interruptData) {
+                this.pendingInterrupt = rows[i].meta.interruptData;
+                if (rows[i].meta.interruptData.run_id) this.runId = rows[i].meta.interruptData.run_id;
+            }
+        }
+    }
+
     _mergeInterruptIntoSnapshot(rows) {
         const ctx = this._resumeInterruptContext;
         if (!ctx) return rows;
 
         const result = [...rows];
 
-        // Collect messages to re-insert (interrupt question + user selection)
         const toInsert = [];
         for (const im of (ctx.interruptMsgs || [])) {
-            const alreadyIn = result.some(r => !r.isUser && r.text === im.text);
-            if (!alreadyIn) toInsert.push({ ...im });
+            const existingIdx = result.findIndex(r => !r.isUser && r.text === im.text);
+            if (existingIdx >= 0) {
+                // Merge our meta (including answered flag) into the snapshot row
+                result[existingIdx] = {
+                    ...result[existingIdx],
+                    isInterruptMessage: true,
+                    meta: { ...result[existingIdx].meta, ...im.meta },
+                };
+            } else {
+                toInsert.push({ ...im });
+            }
         }
         if (ctx.selectionMsg) {
             const alreadyIn = result.some(r => r.isUser && r.text === ctx.selectionMsg.text);
@@ -121,7 +150,6 @@ class ChatController {
         }
         if (toInsert.length === 0) return result;
 
-        // Insert before the last bot message (final answer), or at end if none
         const lastBotIdx = result.reduce((acc, r, i) => (r.isUser ? acc : i), -1);
         const insertAt = lastBotIdx >= 0 ? lastBotIdx : result.length;
         result.splice(insertAt, 0, ...toInsert);
@@ -262,7 +290,12 @@ class ChatController {
                 body,
                 signal: ac.signal,
                 onEvent: (ev) => {
-                    if (this._epoch !== epoch) return;
+                    if (this._epoch !== epoch) {
+                        if (this._bgStreams.has(epoch)) {
+                            this._handleBgAgentEvent(ev, epoch);
+                        }
+                        return;
+                    }
                     this._touchEvent();
                     onBeforeEvent?.(ev);
                     this._handleAgentEvent(ev, {
@@ -302,12 +335,13 @@ class ChatController {
             throw e;
         } finally {
             if (this._epoch === epoch) this._clearWatchdog();
-            this._streamAbort = null;
+            // Only clear if it's still our own AbortController (bg streams must not clobber the new stream's ref)
+            if (this._streamAbort === ac) this._streamAbort = null;
         }
     }
 
     // Bump this when message mapping logic changes to invalidate stale caches
-    static CACHE_VERSION = 'v4';
+    static CACHE_VERSION = 'v5';
 
     async _saveConversationToCache() {
         if (!this.conversationId) return;
@@ -426,6 +460,7 @@ class ChatController {
                         const rows = mapSnapshotToChatRows(list);
                         this.chatModel.clearMessages();
                         rows.forEach((r) => this.chatModel.addMessage(r));
+                        this._applyInterruptStateFromRows(rows);
                         this._saveConversationToCache();
                     } else {
                         this.chatModel.clearMessages();
@@ -1167,6 +1202,13 @@ class ChatController {
             onMessagesUpdate?.();
         }
 
+        // Mark interrupt messages as answered so the UI locks immediately
+        const answeredInterruptIds = [];
+        for (const im of this.chatModel.getMessages().filter(m => m.isInterruptMessage)) {
+            this.chatModel.updateMessage(im.id, { meta: { ...im.meta, answered: true } });
+            answeredInterruptIds.push(im.id);
+        }
+
         const allMsgsBeforeStream = this.chatModel.getMessages();
         this._resumeInterruptContext = {
             interruptMsgs: allMsgsBeforeStream.filter(m => m.isInterruptMessage).map(m => ({ ...m })),
@@ -1199,6 +1241,15 @@ class ChatController {
 
             this._finalizeStreamingState(onMessagesUpdate);
 
+            // Re-apply answered flag in case MESSAGES_SNAPSHOT rebuilt messages without it
+            for (const id of answeredInterruptIds) {
+                const msg = this.chatModel.getMessages().find(m => m.id === id);
+                if (msg && !msg.meta?.answered) {
+                    this.chatModel.updateMessage(id, { meta: { ...msg.meta, answered: true } });
+                }
+            }
+            this._saveConversationToCache();
+
             // If server never confirmed the answer and there's no new bot response, restore interrupt
             if (!this._hitlAnswerReceived && !this.pendingInterrupt) {
                 const msgs = this.chatModel.getMessages();
@@ -1216,6 +1267,15 @@ class ChatController {
             this._finalizeStreamingState(onMessagesUpdate);
             if (e.message !== 'Aborted') {
                 if (!this.pendingInterrupt) this.pendingInterrupt = intr;
+                // Restore interrupt messages to interactive so user can retry
+                for (const id of answeredInterruptIds) {
+                    const msg = this.chatModel.getMessages().find(m => m.id === id);
+                    if (msg) {
+                        const newMeta = { ...msg.meta };
+                        delete newMeta.answered;
+                        this.chatModel.updateMessage(id, { meta: newMeta });
+                    }
+                }
                 this.chatModel.addMessage({
                     text: `❌ Có lỗi khi gửi câu trả lời: ${e.message}. Vui lòng thử lại.`,
                     isUser: false,
@@ -1287,10 +1347,12 @@ class ChatController {
                         const rows = mapSnapshotToChatRows(list);
                         this.chatModel.clearMessages();
                         rows.forEach((r) => this.chatModel.addMessage(r));
+                        this._applyInterruptStateFromRows(rows);
                         this._saveConversationToCache();
                     } else {
                         this.chatModel.clearMessages();
                         this.ensureWelcomeMessage();
+                        this.pendingInterrupt = null;
                     }
                     onMessagesUpdate?.();
                 },
@@ -1329,18 +1391,190 @@ class ChatController {
         return { success: true };
     }
 
+    _handleBgAgentEvent(ev, epoch) {
+        const bg = this._bgStreams.get(epoch);
+        if (!bg || bg.finished) return;
+
+        switch (ev.type) {
+            case 'RUN_STARTED':
+                if (ev.thread_id) bg.conversationId = ev.thread_id;
+                if (ev.run_id) bg.runId = ev.run_id;
+                break;
+
+            case 'TEXT_MESSAGE_START':
+                if (!bg.currentAssistantId) {
+                    const msg = bg.chatModel.addMessage({ text: '', isUser: false, status: 'streaming' });
+                    bg.currentAssistantId = msg.id;
+                }
+                break;
+
+            case 'TEXT_MESSAGE_CONTENT': {
+                const piece = readEventText(ev);
+                if (!piece || ev.is_from_sub_run) break;
+                if (!bg.currentAssistantId) {
+                    const msg = bg.chatModel.addMessage({ text: '', isUser: false, status: 'streaming' });
+                    bg.currentAssistantId = msg.id;
+                }
+                const cur = bg.chatModel.getMessages().find(m => m.id === bg.currentAssistantId);
+                bg.chatModel.updateMessage(bg.currentAssistantId, {
+                    text: (cur?.text || '') + piece,
+                    status: 'streaming',
+                });
+                break;
+            }
+
+            case 'TEXT_MESSAGE_END': {
+                if (!bg.currentAssistantId) break;
+                const finalText = `${readEventText(ev) || ''}`.trim();
+                const cur = bg.chatModel.getMessages().find(m => m.id === bg.currentAssistantId);
+                const nextText = `${cur?.text || ''}${finalText}`.trim();
+                if (nextText) {
+                    bg.chatModel.updateMessage(bg.currentAssistantId, { text: nextText, status: 'sent' });
+                } else {
+                    bg.chatModel.removeMessage(bg.currentAssistantId);
+                }
+                bg.currentAssistantId = null;
+                this._saveBgConversationToCache(bg);
+                break;
+            }
+
+            case 'MESSAGES_SNAPSHOT': {
+                const list = ev.data?.messages;
+                if (list?.length) {
+                    const rows = mapSnapshotToChatRows(list);
+                    bg.chatModel.clearMessages();
+                    rows.forEach(r => bg.chatModel.addMessage(r));
+                }
+                break;
+            }
+
+            case 'HITL_INTERRUPT_MESSAGE': {
+                const interruptData = ev.interrupt || ev.data || {};
+                bg.pendingInterrupt = interruptData;
+                if (interruptData.run_id) bg.runId = interruptData.run_id;
+                break;
+            }
+
+            case 'RUN_FINISHED': {
+                bg.finished = true;
+                if (ev.outcome === 'interrupt') {
+                    if (bg.currentAssistantId) {
+                        const cur = bg.chatModel.getMessages().find(m => m.id === bg.currentAssistantId);
+                        if (cur && `${cur.text || ''}`.trim()) {
+                            bg.chatModel.updateMessage(bg.currentAssistantId, { status: 'sent' });
+                        } else if (cur) {
+                            bg.chatModel.removeMessage(bg.currentAssistantId);
+                        }
+                        bg.currentAssistantId = null;
+                    }
+                    if (ev.interrupt && !bg.pendingInterrupt) {
+                        bg.pendingInterrupt = ev.interrupt;
+                        if (ev.interrupt.run_id) bg.runId = ev.interrupt.run_id;
+                        const q = ev.interrupt.question || 'Cần xác nhận từ bạn.';
+                        bg.chatModel.addMessage({
+                            text: q, isUser: false, status: 'sent',
+                            isInterruptMessage: true,
+                            meta: { interruptData: ev.interrupt },
+                        });
+                    }
+                } else {
+                    bg.pendingInterrupt = null;
+                    if (bg.currentAssistantId) {
+                        const cur = bg.chatModel.getMessages().find(m => m.id === bg.currentAssistantId);
+                        if (cur && `${cur.text || ''}`.trim()) {
+                            bg.chatModel.updateMessage(bg.currentAssistantId, { status: 'sent' });
+                        } else if (cur) {
+                            bg.chatModel.removeMessage(bg.currentAssistantId);
+                        }
+                        bg.currentAssistantId = null;
+                    }
+
+                    // Fetch citations for the last bot message
+                    const token = apiClient.getAuthToken();
+                    const last = bg.chatModel.getMessages().slice().reverse().find(m => !m.isUser);
+                    if (token && bg.runId && last) {
+                        const chatModelRef = bg.chatModel;
+                        const lastId = last.id;
+                        const bgRef = bg;
+                        AgentApiService.fetchCitations(token, bg.runId)
+                            .then(resp => {
+                                const citData = resp?.data;
+                                if (!citData?.passages?.length) return;
+                                const cur = chatModelRef.getMessages().find(m => m.id === lastId);
+                                if (!cur) return;
+                                chatModelRef.updateMessage(lastId, { meta: { ...(cur.meta || {}), citations: citData } });
+                                this._saveBgConversationToCache(bgRef);
+                            })
+                            .catch(() => {});
+                    }
+                }
+                this._saveBgConversationToCache(bg);
+                this._bgStreams.delete(epoch);
+                break;
+            }
+
+            case 'RUN_ERROR':
+            case 'ERROR': {
+                bg.finished = true;
+                if (bg.currentAssistantId) {
+                    bg.chatModel.removeMessage(bg.currentAssistantId);
+                    bg.currentAssistantId = null;
+                }
+                const errText = ev.result || ev.text || ev.data?.message || 'Đã xảy ra lỗi.';
+                bg.chatModel.addMessage({ text: errText, isUser: false, status: 'error' });
+                this._saveBgConversationToCache(bg);
+                this._bgStreams.delete(epoch);
+                break;
+            }
+
+            default:
+                break;
+        }
+    }
+
+    async _saveBgConversationToCache(bg) {
+        if (!bg.conversationId) return;
+        try {
+            const messages = bg.chatModel.getMessages();
+            if (messages.length === 0) return;
+            const key = `conv_${ChatController.CACHE_VERSION}_${bg.conversationId}`;
+            await AsyncStorage.setItem(key, JSON.stringify({
+                messages,
+                pendingInterrupt: bg.pendingInterrupt || null,
+                runId: bg.runId || null,
+                conversationId: bg.conversationId,
+            }));
+        } catch (e) {
+            console.error('BG cache save error:', e);
+        }
+    }
+
     startNewConversation() {
-        if (this._streamAbort) {
+        if (this._streamAbort && this._runActive) {
+            // Move the active stream to background instead of aborting it
+            this._bgStreams.set(this._epoch, {
+                chatModel: this.chatModel,
+                conversationId: this.conversationId,
+                runId: this.runId,
+                pendingInterrupt: this.pendingInterrupt,
+                abortController: this._streamAbort,
+                currentAssistantId: this._currentAssistantId,
+                finished: false,
+            });
+            this._streamAbort = null; // detach — do NOT abort
+        } else if (this._streamAbort) {
             this._streamAbort.abort();
             this._streamAbort = null;
         }
         this._runActive = false;
         this._currentAssistantId = null;
+        this._toolCalls = new Map();
+        this._resumeInterruptContext = null;
         this._clearWatchdog();
         this.conversationId = null;
         this.runId = null;
         this.pendingInterrupt = null;
-        this.chatModel.clearMessages();
+        this.chatModel = new ChatModel();
         this.ensureWelcomeMessage();
         return { success: true };
     }
@@ -1401,6 +1635,10 @@ class ChatController {
     }
 
     clearChat() {
+        for (const [, bg] of this._bgStreams) {
+            bg.abortController?.abort();
+        }
+        this._bgStreams.clear();
         if (this._streamAbort) {
             this._streamAbort.abort();
             this._streamAbort = null;
@@ -1417,6 +1655,10 @@ class ChatController {
     }
 
     async cancelCurrentRun(onMessagesUpdate) {
+        for (const [, bg] of this._bgStreams) {
+            bg.abortController?.abort();
+        }
+        this._bgStreams.clear();
         if (this._streamAbort) {
             this._streamAbort.abort();
             this._streamAbort = null;
@@ -1425,7 +1667,6 @@ class ChatController {
         this._currentAssistantId = null;
         this._clearWatchdog();
         this._cleanupEmptyStreamingAssistants();
-        // Save whatever messages we have so the conversation stays accessible in history
         this._saveConversationToCache();
         onMessagesUpdate?.();
         return { success: true };

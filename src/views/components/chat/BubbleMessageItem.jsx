@@ -29,12 +29,10 @@ const MD_STYLES = {
 };
 
 // Inline interrupt UI embedded inside the bot bubble
-function InlineInterrupt({ pendingInterrupt, answerInterrupt, isSending, isHistorical = false }) {
+function InlineInterrupt({ pendingInterrupt, answerInterrupt, isSending, isAnswered = false }) {
     const [selectedIndices, setSelectedIndices] = useState([]);
     const [customText, setCustomText] = useState('');
     const [loading, setLoading] = useState(false);
-    // Ref-based lock prevents double-submission on iOS where React state
-    // may not re-render fast enough between two rapid taps
     const submittingRef = useRef(false);
 
     const opts = (pendingInterrupt.options || []).filter(o => o?.trim());
@@ -49,6 +47,7 @@ function InlineInterrupt({ pendingInterrupt, answerInterrupt, isSending, isHisto
         : customText.trim();
 
     const handleOptionClick = (idx) => {
+        if (isAnswered) return;
         setSelectedIndices(prev =>
             prev.includes(idx)
                 ? prev.filter(i => i !== idx)
@@ -58,34 +57,17 @@ function InlineInterrupt({ pendingInterrupt, answerInterrupt, isSending, isHisto
     };
 
     const handleCustomChange = (t) => {
+        if (isAnswered) return;
         setCustomText(t);
         setSelectedIndices([]);
     };
 
     const handleSubmit = async () => {
-        console.log('🔘 INLINE INTERRUPT - Submit button pressed', {
-            submitValue,
-            isSending,
-            loading,
-            submitting: submittingRef.current,
-            hasCallback: !!answerInterrupt
-        });
-        if (!submitValue || isSending || loading || submittingRef.current || !answerInterrupt) {
-            console.log('🔘 INLINE INTERRUPT - Early return:', {
-                emptyValue: !submitValue,
-                isSending,
-                loading,
-                submitting: submittingRef.current,
-                noCallback: !answerInterrupt,
-            });
-            return;
-        }
+        if (isAnswered || !submitValue || isSending || loading || submittingRef.current || !answerInterrupt) return;
         submittingRef.current = true;
         setLoading(true);
-        console.log('🔘 INLINE INTERRUPT - Calling answerInterrupt with:', submitValue);
         try {
             await answerInterrupt(submitValue);
-            console.log('🔘 INLINE INTERRUPT - Success');
         } catch (err) {
             console.error('🔘 INLINE INTERRUPT - Error:', err);
         } finally {
@@ -94,7 +76,7 @@ function InlineInterrupt({ pendingInterrupt, answerInterrupt, isSending, isHisto
         }
     };
 
-    const isDisabledAll = isSending || loading;
+    const isDisabledAll = isAnswered || isSending || loading;
 
     return (
         <View style={{ marginTop: 10, borderTopWidth: 1, borderTopColor: '#f0f0f0', paddingTop: 10 }}>
@@ -106,36 +88,48 @@ function InlineInterrupt({ pendingInterrupt, answerInterrupt, isSending, isHisto
                         key={idx}
                         onPress={() => handleOptionClick(idx)}
                         disabled={isDisabledAll}
-                        activeOpacity={0.7}
+                        activeOpacity={isAnswered ? 1 : 0.7}
                         style={{
                             flexDirection: 'row', alignItems: 'center',
                             paddingVertical: 9, paddingHorizontal: 10,
                             borderRadius: 10, marginBottom: 6,
-                            backgroundColor: isSelected ? '#ede9fe' : '#f8f8ff',
+                            backgroundColor: isAnswered ? '#f3f4f6' : (isSelected ? '#ede9fe' : '#f8f8ff'),
                             borderWidth: 1.5,
-                            borderColor: isSelected ? '#7c3aed' : '#d1d5db',
+                            borderColor: isAnswered ? '#e5e7eb' : (isSelected ? '#7c3aed' : '#d1d5db'),
+                            opacity: isAnswered ? 0.6 : 1,
                         }}
                     >
                         <View style={{
                             width: 22, height: 22, borderRadius: 11,
-                            backgroundColor: isSelected ? '#7c3aed' : '#ede9fe',
+                            backgroundColor: isAnswered ? '#e5e7eb' : (isSelected ? '#7c3aed' : '#ede9fe'),
                             alignItems: 'center', justifyContent: 'center', marginRight: 10, flexShrink: 0,
                         }}>
-                            <Text style={{ fontSize: 11, fontWeight: '700', color: isSelected ? 'white' : '#7c3aed' }}>
+                            <Text style={{ fontSize: 11, fontWeight: '700', color: isAnswered ? '#9ca3af' : (isSelected ? 'white' : '#7c3aed') }}>
                                 {String.fromCharCode(65 + idx)}
                             </Text>
                         </View>
-                        <Text style={{ flex: 1, fontSize: 13, lineHeight: 19, color: '#1f2937', fontWeight: isSelected ? '600' : '400' }}>
+                        <Text style={{ flex: 1, fontSize: 13, lineHeight: 19, color: isAnswered ? '#9ca3af' : '#1f2937', fontWeight: isSelected ? '600' : '400' }}>
                             {opt}
                         </Text>
-                        {isSelected && <MaterialIcons name="check-circle" size={16} color="#7c3aed" />}
                     </TouchableOpacity>
                 );
             })}
 
-            {/* Bottom area: shows selected options badge OR free-text input */}
+            {/* Bottom area */}
             <View style={{ marginTop: 4 }}>
-                {selectedIndices.length > 0 ? (
+                {isAnswered ? (
+                    /* Answered lock indicator */
+                    <View style={{
+                        flexDirection: 'row', alignItems: 'center',
+                        backgroundColor: '#f3f4f6', borderWidth: 1.5, borderColor: '#e5e7eb',
+                        borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8,
+                    }}>
+                        <MaterialIcons name="lock" size={14} color="#9ca3af" style={{ marginRight: 6 }} />
+                        <Text style={{ fontSize: 12, color: '#9ca3af', fontStyle: 'italic' }}>
+                            Đã gửi câu trả lời
+                        </Text>
+                    </View>
+                ) : selectedIndices.length > 0 ? (
                     /* Selected options badge + send */
                     <View style={{
                         flexDirection: 'row', alignItems: 'center',
@@ -148,10 +142,10 @@ function InlineInterrupt({ pendingInterrupt, answerInterrupt, isSending, isHisto
                         </Text>
                         <TouchableOpacity
                             onPress={handleSubmit}
-                            disabled={isDisabledAll}
+                            disabled={isSending || loading}
                             style={{
                                 width: 30, height: 30, borderRadius: 15,
-                                backgroundColor: isDisabledAll ? '#e5e7eb' : '#7c3aed',
+                                backgroundColor: isSending || loading ? '#e5e7eb' : '#7c3aed',
                                 alignItems: 'center', justifyContent: 'center', marginLeft: 8,
                             }}
                         >
@@ -178,23 +172,23 @@ function InlineInterrupt({ pendingInterrupt, answerInterrupt, isSending, isHisto
                             placeholderTextColor="#9ca3af"
                             value={customText}
                             onChangeText={handleCustomChange}
-                            editable={!isDisabledAll}
+                            editable={!isSending && !loading}
                             returnKeyType="send"
                             onSubmitEditing={handleSubmit}
                             multiline={false}
                         />
                         <TouchableOpacity
                             onPress={handleSubmit}
-                            disabled={!customText.trim() || isDisabledAll}
+                            disabled={!customText.trim() || isSending || loading}
                             style={{
                                 width: 28, height: 28, borderRadius: 14,
-                                backgroundColor: customText.trim() && !isDisabledAll ? '#7c3aed' : '#e5e7eb',
+                                backgroundColor: customText.trim() && !isSending && !loading ? '#7c3aed' : '#e5e7eb',
                                 alignItems: 'center', justifyContent: 'center', marginLeft: 6,
                             }}
                         >
                             {loading
                                 ? <ActivityIndicator size="small" color="white" />
-                                : <MaterialIcons name="send" size={14} color={customText.trim() && !isDisabledAll && !isHistorical ? 'white' : '#9ca3af'} />
+                                : <MaterialIcons name="send" size={14} color={customText.trim() && !isSending && !loading ? 'white' : '#9ca3af'} />
                             }
                         </TouchableOpacity>
                     </View>
@@ -289,6 +283,7 @@ const BubbleMessageItem = memo(({
             reason: item.meta?.reason || 'information_gathering',
         });
     const showInterrupt = !isUser && !!interruptData;
+    const isAnswered = !!item.meta?.answered;
 
     return (
         <TouchableOpacity
@@ -321,7 +316,7 @@ const BubbleMessageItem = memo(({
                                                 : (value) => answerInterrupt(value, interruptData)
                                         }
                                         isSending={isSending}
-                                        isHistorical={!pendingInterrupt}
+                                        isAnswered={isAnswered}
                                     />
                                 )}
 

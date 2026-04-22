@@ -96,20 +96,32 @@ export function mapSnapshotToChatRows(messages) {
         if (m.role === 'assistant') {
             // Case 1: Assistant with content text
             if (typeof m.content === 'string' && m.content.trim()) {
-                // Detect interrupt question messages via backend metadata
+                // Detect interrupt: server sends type="interrupt" or metadata.interrupt_payload
+                const interruptPayload = m.metadata?.interrupt_payload || null;
                 const isInterrupt = !!(
+                    m.type === 'interrupt' ||
+                    interruptPayload ||
                     m.metadata?.is_interrupt ||
                     m.metadata?.interrupt_id ||
-                    m.metadata?.type === 'interrupt' ||
                     Array.isArray(m.metadata?.options)
                 );
+                const interruptExtra = isInterrupt ? {
+                    interruptData: {
+                        id: m.id || m.metadata?.interrupt_id || id,
+                        run_id: m.metadata?.run_id || null,
+                        question: interruptPayload?.question || m.content,
+                        options: Array.isArray(interruptPayload?.options) ? interruptPayload.options
+                            : (Array.isArray(m.metadata?.options) ? m.metadata.options : []),
+                        reason: interruptPayload?.reason || m.metadata?.reason || 'information_gathering',
+                    },
+                } : {};
                 rows.push({
                     id,
                     text: m.content,
                     isUser: false,
                     timestamp,
                     status: 'sent',
-                    meta: m.metadata || null,
+                    meta: { ...(m.metadata || {}), ...interruptExtra },
                     ...(isInterrupt ? { isInterruptMessage: true } : {}),
                 });
                 continue;

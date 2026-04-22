@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, TextInput, Dimensions, Keyboard, Platform, Modal, SafeAreaView } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, TextInput, Dimensions, Keyboard, Platform, Modal, SafeAreaView, KeyboardAvoidingView } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import Markdown from 'react-native-markdown-display';
 
@@ -158,120 +158,128 @@ export default function CitationModal({ citationModal, onClose }) {
             statusBarTranslucent
         >
             <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-            <TouchableOpacity
-                style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)' }}
-                activeOpacity={1}
-                onPress={handleClose}
-            />
-            <SafeAreaView
-                onStartShouldSetResponder={() => true}
-                style={{
-                    height: sheetHeight,
-                    backgroundColor: 'white',
-                    borderTopLeftRadius: 20, borderTopRightRadius: 20,
-                    shadowColor: '#000', shadowOffset: { width: 0, height: -4 },
-                    shadowOpacity: 0.15, shadowRadius: 12, elevation: 20,
-                }}
-            >
-                {/* Header (pinned) */}
-                <View style={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: '#f3f4f6' }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
-                        <Text style={{ fontSize: 15, fontWeight: '700', color: '#111827', flex: 1 }}>
-                            Trích dẫn [{citationModal?.refId || ''}]
-                        </Text>
-                        {p?.page_range ? (
-                            <Text style={{ fontSize: 12, color: '#6b7280', marginRight: 10 }}>
-                                tr. {p.page_range}
-                            </Text>
-                        ) : null}
-                        <TouchableOpacity onPress={handleClose} style={{ padding: 4 }}>
-                            <MaterialIcons name="close" size={20} color="#6b7280" />
-                        </TouchableOpacity>
-                    </View>
-
-                    {/* Search bar — pinned at top */}
-                    <View style={{
-                        flexDirection: 'row', alignItems: 'center',
-                        backgroundColor: '#f8fafc', borderRadius: 10,
-                        borderWidth: 1, borderColor: searchQuery ? '#2563eb' : '#e5e7eb',
-                        paddingHorizontal: 10, height: 40,
-                    }}>
-                        <MaterialIcons name="search" size={16} color={searchQuery ? '#2563eb' : '#9ca3af'} />
-                        <TextInput
-                            style={{ flex: 1, fontSize: 14, color: '#111827', marginLeft: 8 }}
-                            placeholder="Tìm trong đoạn..."
-                            placeholderTextColor="#9ca3af"
-                            value={searchQuery}
-                            onChangeText={handleSearchChange}
-                            returnKeyType="search"
-                            clearButtonMode="while-editing"
-                        />
-                        {searchQuery.length > 0 && (
-                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                <Text style={{ fontSize: 12, marginRight: 4, color: matchCount > 0 ? '#6b7280' : '#ef4444' }}>
-                                    {matchCount > 0 ? `${matchIndex + 1}/${matchCount}` : 'Không có kết quả'}
+                <TouchableOpacity
+                    style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)' }}
+                    activeOpacity={1}
+                    onPress={handleClose}
+                />
+                <KeyboardAvoidingView
+                    behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                    style={{
+                        height: sheetHeight,
+                        backgroundColor: 'white',
+                        borderTopLeftRadius: 20, borderTopRightRadius: 20,
+                        shadowColor: '#000', shadowOffset: { width: 0, height: -4 },
+                        shadowOpacity: 0.15, shadowRadius: 12, elevation: 20,
+                    }}
+                >
+                    <SafeAreaView
+                        onStartShouldSetResponder={() => true}
+                        style={{
+                            flex: 1,
+                            backgroundColor: 'white',
+                        }}
+                    >
+                        {/* Header (pinned) */}
+                        <View style={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: '#f3f4f6' }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+                                <Text style={{ fontSize: 15, fontWeight: '700', color: '#111827', flex: 1 }}>
+                                    Trích dẫn [{citationModal?.refId || ''}]
                                 </Text>
-                                {matchCount > 0 && (
-                                    <>
-                                        <TouchableOpacity onPress={() => setMatchIndex((matchIndex - 1 + matchCount) % matchCount)} style={{ padding: 3 }}>
-                                            <MaterialIcons name="keyboard-arrow-up" size={18} color="#6b7280" />
-                                        </TouchableOpacity>
-                                        <TouchableOpacity onPress={() => setMatchIndex((matchIndex + 1) % matchCount)} style={{ padding: 3 }}>
-                                            <MaterialIcons name="keyboard-arrow-down" size={18} color="#6b7280" />
-                                        </TouchableOpacity>
-                                    </>
+                                {p?.page_range ? (
+                                    <Text style={{ fontSize: 12, color: '#6b7280', marginRight: 10 }}>
+                                        tr. {p.page_range}
+                                    </Text>
+                                ) : null}
+                                <TouchableOpacity onPress={handleClose} style={{ padding: 4 }}>
+                                    <MaterialIcons name="close" size={20} color="#6b7280" />
+                                </TouchableOpacity>
+                            </View>
+
+                            {/* Search bar — pinned at top */}
+                            <View style={{
+                                flexDirection: 'row', alignItems: 'center',
+                                backgroundColor: '#f8fafc', borderRadius: 10,
+                                borderWidth: 1, borderColor: searchQuery ? '#2563eb' : '#e5e7eb',
+                                paddingHorizontal: 10, height: 40,
+                            }}>
+                                <MaterialIcons name="search" size={16} color={searchQuery ? '#2563eb' : '#9ca3af'} />
+                                <TextInput
+                                    style={{ flex: 1, fontSize: 14, color: '#111827', marginLeft: 8 }}
+                                    placeholder="Tìm trong đoạn..."
+                                    placeholderTextColor="#9ca3af"
+                                    value={searchQuery}
+                                    onChangeText={handleSearchChange}
+                                    returnKeyType="search"
+                                    clearButtonMode="while-editing"
+                                />
+                                {searchQuery.length > 0 && (
+                                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                        <Text style={{ fontSize: 12, marginRight: 4, color: matchCount > 0 ? '#6b7280' : '#ef4444' }}>
+                                            {matchCount > 0 ? `${matchIndex + 1}/${matchCount}` : 'Không có kết quả'}
+                                        </Text>
+                                        {matchCount > 0 && (
+                                            <>
+                                                <TouchableOpacity onPress={() => setMatchIndex((matchIndex - 1 + matchCount) % matchCount)} style={{ padding: 3 }}>
+                                                    <MaterialIcons name="keyboard-arrow-up" size={18} color="#6b7280" />
+                                                </TouchableOpacity>
+                                                <TouchableOpacity onPress={() => setMatchIndex((matchIndex + 1) % matchCount)} style={{ padding: 3 }}>
+                                                    <MaterialIcons name="keyboard-arrow-down" size={18} color="#6b7280" />
+                                                </TouchableOpacity>
+                                            </>
+                                        )}
+                                    </View>
                                 )}
                             </View>
-                        )}
-                    </View>
-                </View>
+                        </View>
 
-                {/* Scrollable content */}
-                <ScrollView
-                    ref={scrollViewRef}
-                    style={{ flex: 1 }}
-                    contentContainerStyle={{ padding: 16, paddingBottom: 16 }}
-                    showsVerticalScrollIndicator
-                    keyboardShouldPersistTaps="handled"
-                >
-                    {!fullText ? (
-                        <View style={{ alignItems: 'center', paddingVertical: 32 }}>
-                            <MaterialIcons name="info-outline" size={40} color="#d1d5db" />
-                            <Text style={{ fontSize: 14, color: '#9ca3af', marginTop: 10 }}>
-                                Nội dung trích dẫn không có sẵn.
+                        {/* Scrollable content */}
+                        <ScrollView
+                            ref={scrollViewRef}
+                            style={{ flex: 1, maxHeight: SHEET_MAX - 150 - keyboardHeight }}
+                            contentContainerStyle={{ padding: 16, paddingBottom: 16 }}
+                            showsVerticalScrollIndicator
+                            keyboardShouldPersistTaps="handled"
+                        >
+                            {!fullText ? (
+                                <View style={{ alignItems: 'center', paddingVertical: 32 }}>
+                                    <MaterialIcons name="info-outline" size={40} color="#d1d5db" />
+                                    <Text style={{ fontSize: 14, color: '#9ca3af', marginTop: 10 }}>
+                                        Nội dung trích dẫn không có sẵn.
+                                    </Text>
+                                </View>
+                            ) : searchQuery.trim() ? (
+                                renderHighlighted()
+                            ) : (
+                                <Markdown style={MD_STYLES}>
+                                    {fullText}
+                                </Markdown>
+                            )}
+                        </ScrollView>
+
+                        {/* Footer */}
+                        <View style={{
+                            borderTopWidth: 1, borderTopColor: '#f3f4f6',
+                            paddingHorizontal: 16, paddingVertical: 10,
+                            flexDirection: 'row', alignItems: 'center',
+                        }}>
+                            {p?.id != null ? (
+                                <Text style={{ fontSize: 11, color: '#9ca3af', marginRight: 12 }}>
+                                    Đoạn #{p.id}
+                                </Text>
+                            ) : null}
+                            <View style={{
+                                width: 26, height: 26, borderRadius: 6,
+                                backgroundColor: '#dbeafe', alignItems: 'center', justifyContent: 'center', marginRight: 8,
+                            }}>
+                                <MaterialIcons name="description" size={15} color="#2563eb" />
+                            </View>
+                            <Text style={{ fontSize: 12, color: '#374151', fontWeight: '500', flex: 1 }} numberOfLines={1}>
+                                {citationModal?.file?.original_name || ''}
                             </Text>
                         </View>
-                    ) : searchQuery.trim() ? (
-                        renderHighlighted()
-                    ) : (
-                        <Markdown style={MD_STYLES}>
-                            {fullText}
-                        </Markdown>
-                    )}
-                </ScrollView>
-
-                {/* Footer */}
-                <View style={{
-                    borderTopWidth: 1, borderTopColor: '#f3f4f6',
-                    paddingHorizontal: 16, paddingVertical: 10,
-                    flexDirection: 'row', alignItems: 'center',
-                }}>
-                    {p?.id != null ? (
-                        <Text style={{ fontSize: 11, color: '#9ca3af', marginRight: 12 }}>
-                            Đoạn #{p.id}
-                        </Text>
-                    ) : null}
-                    <View style={{
-                        width: 26, height: 26, borderRadius: 6,
-                        backgroundColor: '#dbeafe', alignItems: 'center', justifyContent: 'center', marginRight: 8,
-                    }}>
-                        <MaterialIcons name="description" size={15} color="#2563eb" />
-                    </View>
-                    <Text style={{ fontSize: 12, color: '#374151', fontWeight: '500', flex: 1 }} numberOfLines={1}>
-                        {citationModal?.file?.original_name || ''}
-                    </Text>
-                </View>
-            </SafeAreaView>
+                    </SafeAreaView>
+                </KeyboardAvoidingView>
             </View>
         </Modal>
     );
