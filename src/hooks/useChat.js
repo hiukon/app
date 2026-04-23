@@ -5,6 +5,7 @@ export function useChat() {
     const [chatController] = useState(() => new ChatController());
     const [messages, setMessages] = useState(() => chatController.getMessages());
     const [isSending, setIsSending] = useState(false);
+    const [isOpeningConversation, setIsOpeningConversation] = useState(false);
     const [pendingInterrupt, setPendingInterrupt] = useState(() =>
         chatController.getPendingInterrupt?.() || null
     );
@@ -12,6 +13,7 @@ export function useChat() {
     // Any in-flight sendMessage/openConversation whose gen no longer matches will not
     // reset isSending when it eventually finishes, preventing race conditions.
     const sendGenRef = useRef(0);
+    const openGenRef = useRef(0);
     const [conversations, setConversations] = useState([]);
 
     // ✅ HÀM LỌC MESSAGE - CHỈ HIỂN THỊ KẾT QUẢ
@@ -279,9 +281,8 @@ export function useChat() {
     };
 
     const openConversation = async (conversationId) => {
-        // Invalidate any in-flight sendMessage so its finally won't race with us
-        const gen = ++sendGenRef.current;
-        setIsSending(true);
+        const gen = ++openGenRef.current;
+        setIsOpeningConversation(true);
         try {
             const bump = () => {
                 updateFilteredMessages();
@@ -292,7 +293,7 @@ export function useChat() {
             setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
             return out;
         } finally {
-            if (sendGenRef.current === gen) setIsSending(false);
+            if (openGenRef.current === gen) setIsOpeningConversation(false);
         }
     };
 
@@ -329,6 +330,7 @@ export function useChat() {
         editMessage,
         resendEditedMessage,
         isSending,
+        isOpeningConversation,
         pendingInterrupt,
         answerInterrupt,
         conversations,

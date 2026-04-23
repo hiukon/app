@@ -1,9 +1,13 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import * as Speech from 'expo-speech';
 import { Platform } from 'react-native';
 
 // Android TTS has ~4000 char hard limit per utterance
 const CHUNK_SIZE = 3800;
+
+// Cache selected iOS Vietnamese voice to avoid re-fetching
+let selectedIosVoice = null;
+let iosVoiceInitialized = false;
 
 function cleanForSpeech(text) {
     return text
@@ -63,20 +67,55 @@ function splitChunks(text) {
     return result.filter(Boolean);
 }
 
+function isVietnameseVoice(voice) {
+    const language = `${voice?.language || ''}`.toLowerCase();
+    const name = `${voice?.name || ''}`.toLowerCase();
+    const identifier = `${voice?.identifier || ''}`.toLowerCase();
+    return (
+        language === 'vi-vn' ||
+        language.startsWith('vi-') ||
+        language === 'vi' ||
+        name.includes('viet') ||
+        identifier.includes('vi-vn')
+    );
+}
+
+// iOS: only choose a real Vietnamese voice. If none exists, rely on language fallback.
+async function getIosVoice() {
+    if (iosVoiceInitialized) return selectedIosVoice;
+
+    try {
+        const voices = await Speech.getAvailableVoicesAsync();
+        const vi = voices.find(isVietnameseVoice);
+
+        if (vi) {
+            selectedIosVoice = vi.identifier || null;
+            iosVoiceInitialized = true;
+            return selectedIosVoice;
+        }
+        console.warn('No Vietnamese iOS TTS voice found. Falling back to language=vi-VN.');
+    } catch (e) {
+        console.warn('Failed to get iOS voices:', e);
+    }
+
+    iosVoiceInitialized = true;
+    selectedIosVoice = null;
+    return selectedIosVoice;
+}
+
 export function useTTS() {
     const [speakingMessageId, setSpeakingMessageId] = useState(null);
     // Use a ref to hold mutable session state — avoids stale closures in callbacks
     const sessionRef = useRef({ chunks: [], idx: 0, id: null });
 
-    const playNext = useCallback(() => {
+    const playNext = useCallback(async () => {
         const { chunks, idx, id } = sessionRef.current;
         if (!id || idx >= chunks.length) return;
 
         const isLast = idx === chunks.length - 1;
 
         try {
-            Speech.speak(chunks[idx], {
-                language: 'vi-VN',
+            const speakOptions = {
                 pitch: 1.0,
                 // iOS scale: 0.0–1.0 where 0.5 is default normal speed
                 // Android scale: 0.0–3.0 where 1.0 is normal speed
@@ -103,7 +142,15 @@ export function useTTS() {
                         setSpeakingMessageId(null);
                     }
                 },
-            });
+            };
+
+            speakOptions.language = 'vi-VN';
+            if (Platform.OS === 'ios') {
+                const voice = await getIosVoice();
+                if (voice) speakOptions.voice = voice;
+            }
+
+            Speech.speak(chunks[idx], speakOptions);
         } catch {
             sessionRef.current.id = null;
             setSpeakingMessageId(null);
@@ -127,6 +174,13 @@ export function useTTS() {
         try { Speech.stop(); } catch { }
         sessionRef.current = { chunks: [], idx: 0, id: null };
         setSpeakingMessageId(null);
+    }, []);
+
+    // Initialize iOS voice on mount
+    useEffect(() => {
+        if (Platform.OS === 'ios') {
+            getIosVoice().catch(e => console.warn('Voice init error:', e));
+        }
     }, []);
 
     return { speakingMessageId, speakMessage, stopSpeaking };

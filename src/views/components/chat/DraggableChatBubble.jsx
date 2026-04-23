@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
-import { View, Text, TouchableOpacity, Modal, FlatList, SafeAreaView, KeyboardAvoidingView, Platform, ImageBackground, Image } from 'react-native';
+import { View, Text, TouchableOpacity, Modal, FlatList, SafeAreaView, KeyboardAvoidingView, Platform, ImageBackground, Image, ActivityIndicator } from 'react-native';
 import { PanGestureHandler, State } from 'react-native-gesture-handler';
 import Animated, { useSharedValue, useAnimatedStyle, withSpring } from 'react-native-reanimated';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -36,7 +36,7 @@ export default function DraggableChatBubble() {
     // ── Chat ──────────────────────────────────────────────────────────────────
     const {
         messages, sendMessage, cancel, resendEditedMessage,
-        isSending, pendingInterrupt, answerInterrupt,
+        isSending, isOpeningConversation, pendingInterrupt, answerInterrupt,
         conversations, loadConversations, openConversation, deleteConversation, newConversation,
     } = useChat();
 
@@ -68,6 +68,7 @@ export default function DraggableChatBubble() {
     const [loadingHistory, setLoadingHistory] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
     const [citationModal, setCitationModal] = useState(null);
+    const [openingConversationId, setOpeningConversationId] = useState(null);
 
     // ── Suggestion state ──────────────────────────────────────────────────────
     const [showSuggestion, setShowSuggestion] = useState(false);
@@ -81,7 +82,6 @@ export default function DraggableChatBubble() {
     const [domainCodeToIdMap, setDomainCodeToIdMap] = useState({});
 
     const flatListRef = useRef(null);
-
     // ── Draggable bubble animation ────────────────────────────────────────────
     const translateX = useSharedValue(0);
     const translateY = useSharedValue(0);
@@ -148,6 +148,10 @@ export default function DraggableChatBubble() {
 
     const openHistory = async () => { setShowHistory(true); await loadHistoryData(); };
     const onRefresh = async () => { setRefreshing(true); await loadHistoryData(); };
+
+    useEffect(() => {
+        if (!isOpeningConversation) setOpeningConversationId(null);
+    }, [isOpeningConversation]);
 
     const getDisplayTitle = (title) => {
         if (!title) return 'Cuộc trò chuyện';
@@ -339,14 +343,30 @@ export default function DraggableChatBubble() {
         const displayTitle = getDisplayTitle(item.title) || 'Cuộc trò chuyện';
         const isCmd = isCommandText(displayTitle);
         const truncatedTitle = truncateHistoryText(displayTitle, 2, 100);
+        const isOpeningThisConversation = isOpeningConversation && openingConversationId === item.id;
         return (
             <View style={{ paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#f3f4f6', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                 <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: isCmd ? '#fef3c7' : '#e0e7ff', alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
                     <MaterialIcons name={isCmd ? 'bolt' : 'chat-bubble-outline'} size={16} color={isCmd ? '#d97706' : '#4f46e5'} />
                 </View>
-                <TouchableOpacity onPress={async () => { await openConversation(item.id); setInputText(''); setShowHistory(false); }} style={{ flex: 1 }}>
+                <TouchableOpacity
+                    onPress={async () => {
+                        setOpeningConversationId(item.id);
+                        await openConversation(item.id);
+                        setInputText('');
+                        setShowHistory(false);
+                    }}
+                    disabled={isOpeningConversation}
+                    style={{ flex: 1, opacity: isOpeningConversation && !isOpeningThisConversation ? 0.45 : 1 }}
+                >
                     <Text style={{ fontSize: 14, color: '#111827', fontWeight: '500', marginBottom: 4 }} numberOfLines={2}>{truncatedTitle}</Text>
                     <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        {isOpeningThisConversation && (
+                            <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#eff6ff', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999, marginRight: 6 }}>
+                                <ActivityIndicator size="small" color="#2563eb" />
+                                <Text style={{ fontSize: 10, color: '#1d4ed8', fontWeight: '600', marginLeft: 6 }}>Đang mở</Text>
+                            </View>
+                        )}
                         {isCmd && (
                             <View style={{ backgroundColor: '#fef3c7', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, marginRight: 6 }}>
                                 <Text style={{ fontSize: 10, color: '#b45309', fontWeight: '600' }}>Command</Text>
@@ -360,7 +380,7 @@ export default function DraggableChatBubble() {
                 </TouchableOpacity>
             </View>
         );
-    }, [domainIdToCodeMap, domainCodeToIdMap, openConversation, deleteConversation]);
+    }, [domainIdToCodeMap, domainCodeToIdMap, openConversation, deleteConversation, isOpeningConversation, openingConversationId]);
 
     return (
         <>
@@ -408,18 +428,41 @@ export default function DraggableChatBubble() {
                             </LinearGradient>
 
                             {/* Messages */}
-                            <FlatList
-                                ref={flatListRef}
-                                data={messages}
-                                keyExtractor={(item, index) => `${item.id || index}${item.status === 'streaming' ? '-s' : ''}`}
-                                renderItem={renderMessage}
-                                contentContainerStyle={{ padding: 16, flexGrow: 1 }}
-                                showsVerticalScrollIndicator={false}
-                                initialNumToRender={15}
-                                maxToRenderPerBatch={10}
-                                windowSize={21}
-                                removeClippedSubviews={false}
-                            />
+                            <View style={{ flex: 1, position: 'relative' }}>
+                                <FlatList
+                                    ref={flatListRef}
+                                    data={messages}
+                                    keyExtractor={(item, index) => `${item.id || index}${item.status === 'streaming' ? '-s' : ''}`}
+                                    renderItem={renderMessage}
+                                    contentContainerStyle={{ padding: 16, flexGrow: 1 }}
+                                    showsVerticalScrollIndicator={false}
+                                    keyboardShouldPersistTaps="handled"
+                                    initialNumToRender={15}
+                                    maxToRenderPerBatch={10}
+                                    windowSize={21}
+                                    removeClippedSubviews={false}
+                                />
+
+                                {isOpeningConversation && (
+                                    <View style={{ position: 'absolute', top: 16, left: 16, right: 16, alignItems: 'center' }}>
+                                        <View style={{ minWidth: 220, maxWidth: '100%', backgroundColor: 'rgba(15, 23, 42, 0.92)', borderRadius: 18, paddingHorizontal: 16, paddingVertical: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.25, shadowRadius: 18, elevation: 8 }}>
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
+                                                <View style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: 'rgba(59,130,246,0.18)', alignItems: 'center', justifyContent: 'center', marginRight: 10 }}>
+                                                    <ActivityIndicator size="small" color="#60a5fa" />
+                                                </View>
+                                                <View style={{ flexShrink: 1 }}>
+                                                    <Text style={{ color: 'white', fontSize: 14, fontWeight: '700' }}>
+                                                        Đang mở cuộc trò chuyện...
+                                                    </Text>
+                                                    <Text style={{ color: '#cbd5e1', fontSize: 12, marginTop: 2 }}>
+                                                        Vui lòng chờ trong giây lát
+                                                    </Text>
+                                                </View>
+                                            </View>
+                                        </View>
+                                    </View>
+                                )}
+                            </View>
 
                             <ChatInputArea
                                 inputText={inputText}

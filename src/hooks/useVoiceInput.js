@@ -133,6 +133,9 @@ export function useVoiceInput({ onPartialResult, onFinalResult }) {
             hasVoiceResultRef.current = false;
             pendingFinalRef.current = null;
             isIgnoreResultsRef.current = false;
+            // Destroy session cũ trước khi start để tránh lỗi recognizer-busy (code 8)
+            // xảy ra sau khi đổi model hoặc tạo tab trò chuyện mới
+            try { await Voice.destroy(); } catch { }
             await Voice.start('vi-VN');
         } catch (error) {
             setIsListening(false);
