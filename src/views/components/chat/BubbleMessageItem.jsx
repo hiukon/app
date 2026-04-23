@@ -42,9 +42,20 @@ function InlineInterrupt({ pendingInterrupt, answerInterrupt, isSending, isAnswe
     const nextLabel = String.fromCharCode(65 + displayOpts.length);
 
     const selectedTexts = selectedIndices.map(idx => displayOpts[idx]).filter(Boolean);
-    const submitValue = selectedTexts.length > 0
-        ? selectedTexts.join(', ')
-        : customText.trim();
+    const selectedOptionLabels = selectedIndices
+        .map(idx => `${String.fromCharCode(65 + idx)}: ${displayOpts[idx]}`)
+        .filter(Boolean);
+    const submitPayload = selectedTexts.length > 0
+        ? {
+            selected: selectedOptionLabels,
+            custom: '',
+            displayText: selectedOptionLabels.join(', '),
+        }
+        : {
+            selected: [],
+            custom: customText.trim(),
+            displayText: customText.trim(),
+        };
 
     const handleOptionClick = (idx) => {
         if (isAnswered) return;
@@ -63,11 +74,11 @@ function InlineInterrupt({ pendingInterrupt, answerInterrupt, isSending, isAnswe
     };
 
     const handleSubmit = async () => {
-        if (isAnswered || !submitValue || isSending || loading || submittingRef.current || !answerInterrupt) return;
+        if (isAnswered || !submitPayload.displayText || isSending || loading || submittingRef.current || !answerInterrupt) return;
         submittingRef.current = true;
         setLoading(true);
         try {
-            await answerInterrupt(submitValue);
+            await answerInterrupt(submitPayload);
         } catch (err) {
             console.error('🔘 INLINE INTERRUPT - Error:', err);
         } finally {

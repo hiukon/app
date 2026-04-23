@@ -121,7 +121,13 @@ export function mapSnapshotToChatRows(messages) {
                     isUser: false,
                     timestamp,
                     status: 'sent',
-                    meta: { ...(m.metadata || {}), ...interruptExtra },
+                    meta: {
+                        ...(m.metadata || {}),
+                        ...((m.metadata?.run_id || m.run_id)
+                            ? { run_id: m.metadata?.run_id || m.run_id, runId: m.metadata?.run_id || m.run_id }
+                            : {}),
+                        ...interruptExtra
+                    },
                     ...(isInterrupt ? { isInterruptMessage: true } : {}),
                 });
                 continue;

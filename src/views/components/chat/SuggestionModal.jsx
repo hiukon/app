@@ -18,6 +18,7 @@ export default function SuggestionModal({
     title,
     icon,
     emptyMessage = 'Không tìm thấy',
+    keyboardHeight = 0,
 }) {
     const { scale } = useResponsive();
 
@@ -72,7 +73,7 @@ export default function SuggestionModal({
                 onStartShouldSetResponder={() => true}
                 style={{
                     position: 'absolute',
-                    bottom: 100,
+                    bottom: keyboardHeight > 0 ? keyboardHeight + 110 : 100,
                     left: 16,
                     right: 16,
                     backgroundColor: 'white',
@@ -112,6 +113,7 @@ export default function SuggestionModal({
                         keyExtractor={(item) => item.id}
                         renderItem={renderItem}
                         showsVerticalScrollIndicator={false}
+                        keyboardShouldPersistTaps="always"
                     />
                 )}
             </View>

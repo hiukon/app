@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useRef } from 'react';
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import ChatController from '../controllers/ChatController';
 
 export function useChat() {
@@ -14,6 +14,8 @@ export function useChat() {
     // reset isSending when it eventually finishes, preventing race conditions.
     const sendGenRef = useRef(0);
     const openGenRef = useRef(0);
+    const pollingRef = useRef(null);
+    const messagesHashRef = useRef(null);
     const [conversations, setConversations] = useState([]);
 
     // ✅ HÀM LỌC MESSAGE - CHỈ HIỂN THỊ KẾT QUẢ
@@ -118,9 +120,59 @@ export function useChat() {
         return filtered;
     }, [chatController, filterDisplayMessages]);
 
+    // ✅ POLLING TO SYNC APP-WEB: Detect when web makes changes
+    const startConversationPolling = useCallback(() => {
+        if (pollingRef.current) clearInterval(pollingRef.current);
+
+        pollingRef.current = setInterval(async () => {
+            const conversationId = chatController.conversationId;
+            if (!conversationId || isSending) return;
+
+            try {
+                // Fetch latest conversation history
+                await chatController.fetchConversationHistory(conversationId, () => {
+                    // Silent update - no UI flashing
+                });
+
+                // Check if messages changed
+                const currentMessages = chatController.getMessages();
+                const currentHash = JSON.stringify(
+                    currentMessages.map(m => ({ id: m.id, text: m.text, meta: m.meta }))
+                );
+
+                if (messagesHashRef.current !== currentHash) {
+                    messagesHashRef.current = currentHash;
+                    updateFilteredMessages();
+                    setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
+                }
+            } catch (error) {
+                console.log('Polling sync error (silent):', error.message);
+            }
+        }, 3000); // Poll every 3 seconds
+    }, [isSending, updateFilteredMessages, chatController]);
+
+    const stopConversationPolling = useCallback(() => {
+        if (pollingRef.current) {
+            clearInterval(pollingRef.current);
+            pollingRef.current = null;
+        }
+    }, []);
+
     const toInterruptPayload = (interrupt, input) => {
+        const normalizedInput =
+            typeof input === 'string'
+                ? { displayText: `${input || ''}`.trim(), selected: [], custom: `${input || ''}`.trim() }
+                : {
+                    displayText: `${input?.displayText || input?.custom || (input?.selected || []).join(', ') || ''}`.trim(),
+                    selected: Array.isArray(input?.selected) ? input.selected.filter(Boolean) : [],
+                    custom: `${input?.custom || ''}`.trim(),
+                };
         const reason = `${interrupt?.reason || ''}`.toLowerCase();
-        const value = `${input || ''}`.trim();
+        const value = normalizedInput.displayText;
+        const hasSelectedOptions = normalizedInput.selected.length > 0;
+        const selectionPayload = hasSelectedOptions
+            ? { custom: normalizedInput.custom || '', selected: normalizedInput.selected }
+            : null;
 
         switch (reason) {
             case 'human_approval':
@@ -129,6 +181,7 @@ export function useChat() {
                 const yes = /^(yes|y|approve|đồng ý|dong y|ok|có)$/i.test(value);
                 return {
                     action: yes ? 'approve' : 'reject',
+                    ...(selectionPayload || {}),
                     tool_name: interrupt?.payload?.tool_name
                 };
             }
@@ -141,20 +194,24 @@ export function useChat() {
             }
 
             case 'upload_required': {
+                if (selectionPayload) return { answer: value, ...selectionPayload };
                 return { answer: value };
             }
 
             // ✅ SỬA LẠI CASE NÀY
             case 'information_gathering': {
+                if (selectionPayload) return { answer: value, ...selectionPayload };
                 // Theo tài liệu §9.4: payload có { answer: string }
                 return { answer: value };
             }
 
             case 'policy_hold': {
+                if (selectionPayload) return { answer: value, ...selectionPayload };
                 return { answer: value };
             }
 
             default: {
+                if (selectionPayload) return { answer: value, ...selectionPayload };
                 // Fallback - dùng answer
                 return { answer: value };
             }
@@ -240,12 +297,16 @@ export function useChat() {
             };
 
             const isHistorical = !chatController.getPendingInterrupt?.() && !!storedInterruptData;
+            const displayText =
+                typeof input === 'string'
+                    ? input.trim()
+                    : `${input?.displayText || input?.custom || (input?.selected || []).join(', ') || ''}`.trim();
 
             if (isHistorical) {
                 // Re-select after already getting a response: remove old result, send as new message
                 chatController.pruneAfterInterruptSelection();
                 updateFilteredMessages();
-                const result = await chatController.sendUserMessage(input.trim(), bump);
+                const result = await chatController.sendUserMessage(displayText, bump);
                 updateFilteredMessages();
                 setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
                 return result;
@@ -269,6 +330,18 @@ export function useChat() {
         }
     };
 
+    // ✅ START/STOP POLLING when conversation changes
+    useEffect(() => {
+        const conversationId = chatController.conversationId;
+        if (conversationId) {
+            startConversationPolling();
+        } else {
+            stopConversationPolling();
+        }
+
+        return () => stopConversationPolling();
+    }, [chatController.conversationId, startConversationPolling, stopConversationPolling]);
+
     const loadConversations = async () => {
         const out = await chatController.listConversations();
         if (out.success) {
@@ -283,6 +356,7 @@ export function useChat() {
     const openConversation = async (conversationId) => {
         const gen = ++openGenRef.current;
         setIsOpeningConversation(true);
+        messagesHashRef.current = null; // ✅ Reset hash for new conversation
         try {
             const bump = () => {
                 if (openGenRef.current !== gen) return;
@@ -311,6 +385,7 @@ export function useChat() {
     const newConversation = () => {
         // Abort ongoing stream and prevent its finally from racing
         sendGenRef.current++;
+        messagesHashRef.current = null; // ✅ Reset hash for new conversation
         const out = chatController.startNewConversation();
         setIsSending(false);
         updateFilteredMessages();

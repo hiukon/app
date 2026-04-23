@@ -38,6 +38,18 @@ function readEventText(ev) {
     );
 }
 
+function extractInterruptAnswerText(payload, fallback = '') {
+    const selected = Array.isArray(payload?.selected) ? payload.selected.filter(Boolean) : [];
+    const custom = `${payload?.custom || ''}`.trim();
+    const answer = `${payload?.answer || ''}`.trim();
+    return (
+        selected.join(', ').trim() ||
+        custom ||
+        answer ||
+        `${fallback || ''}`.trim()
+    );
+}
+
 function resolvedAgentCode() {
     return AGENT_CODE || 'default';
 }
@@ -1001,6 +1013,40 @@ class ChatController {
                 break;
             }
 
+            case 'HITL_ANSWER_RECEIVED': {
+                this._hitlAnswerReceived = true;
+                this.pendingInterrupt = null;
+
+                const interruptPayload = ev.interrupt?.payload || ev.data?.payload || {};
+                const answerText = extractInterruptAnswerText(interruptPayload, readEventText(ev));
+
+                if (answerText) {
+                    const rows = this.chatModel.getMessages();
+                    const existingSelection = [...rows].reverse().find((m) => m.isUser && m.isInterruptSelection);
+                    if (existingSelection) {
+                        this.chatModel.updateMessage(existingSelection.id, {
+                            text: answerText,
+                            meta: { ...(existingSelection.meta || {}), serverConfirmed: true },
+                        });
+                    } else {
+                        this.chatModel.addMessage({
+                            text: answerText,
+                            isUser: true,
+                            isInterruptSelection: true,
+                            meta: { serverConfirmed: true },
+                        });
+                    }
+                }
+
+                for (const im of this.chatModel.getMessages().filter(m => m.isInterruptMessage)) {
+                    this.chatModel.updateMessage(im.id, { meta: { ...(im.meta || {}), answered: true } });
+                }
+
+                this._saveConversationToCache();
+                onMessagesUpdate?.();
+                break;
+            }
+
             case 'USER_CANCELLED':
                 this._runActive = false;
                 this._currentAssistantId = null;
@@ -1190,12 +1236,12 @@ class ChatController {
         }
 
         const selectionText =
-            resumePayload.answer != null ? String(resumePayload.answer).trim() :
-                resumePayload.action === 'approve' ? 'Đồng ý' :
-                    resumePayload.action === 'reject' ? 'Từ chối' :
-                        resumePayload.action === 'retry' ? 'Thử lại' :
-                            resumePayload.action === 'skip' ? 'Bỏ qua' :
-                                resumePayload.action === 'abort' ? 'Hủy' : null;
+            extractInterruptAnswerText(resumePayload) ||
+            (resumePayload.action === 'approve' ? 'Đồng ý' :
+                resumePayload.action === 'reject' ? 'Từ chối' :
+                    resumePayload.action === 'retry' ? 'Thử lại' :
+                        resumePayload.action === 'skip' ? 'Bỏ qua' :
+                            resumePayload.action === 'abort' ? 'Hủy' : null);
         if (selectionText) {
             this.chatModel.addMessage({ text: selectionText, isUser: true, isInterruptSelection: true });
             this._saveConversationToCache();
