@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
-import { View, Text, TouchableOpacity, Modal, FlatList, SafeAreaView, KeyboardAvoidingView, Platform, ImageBackground, Image, ActivityIndicator } from 'react-native';
+import { View, Text, TouchableOpacity, Modal, FlatList, SafeAreaView, Platform, ImageBackground, Image, ActivityIndicator, Keyboard } from 'react-native';
 import { PanGestureHandler, State } from 'react-native-gesture-handler';
 import Animated, { useSharedValue, useAnimatedStyle, withSpring } from 'react-native-reanimated';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -69,6 +69,7 @@ export default function DraggableChatBubble() {
     const [refreshing, setRefreshing] = useState(false);
     const [citationModal, setCitationModal] = useState(null);
     const [openingConversationId, setOpeningConversationId] = useState(null);
+    const [keyboardHeight, setKeyboardHeight] = useState(0);
 
     // ── Suggestion state ──────────────────────────────────────────────────────
     const [showSuggestion, setShowSuggestion] = useState(false);
@@ -107,6 +108,15 @@ export default function DraggableChatBubble() {
     };
 
     // ── Effects ───────────────────────────────────────────────────────────────
+    useEffect(() => {
+        if (!modalVisible) { setKeyboardHeight(0); return; }
+        const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+        const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+        const showSub = Keyboard.addListener(showEvent, (e) => setKeyboardHeight(e.endCoordinates.height));
+        const hideSub = Keyboard.addListener(hideEvent, () => setKeyboardHeight(0));
+        return () => { showSub.remove(); hideSub.remove(); };
+    }, [modalVisible]);
+
     useEffect(() => {
         if (messages.length > 0 && flatListRef.current) {
             setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
@@ -400,10 +410,7 @@ export default function DraggableChatBubble() {
                 <ImageBackground source={botBubbleBg} style={{ flex: 1 }} resizeMode="cover">
                     <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)' }} />
                     <SafeAreaView style={{ flex: 1, backgroundColor: 'transparent', overflow: 'hidden' }}>
-                        <KeyboardAvoidingView
-                            style={{ flex: 1 }}
-                            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-                        >
+                        <View style={{ flex: 1, paddingBottom: keyboardHeight }}>
                             {/* Header */}
                             <LinearGradient
                                 colors={['#732cc9', '#7840f2', '#5c50da', '#5233f0']}
@@ -482,7 +489,7 @@ export default function DraggableChatBubble() {
                                 onSend={handleSendMessage}
                                 onCancel={cancel}
                             />
-                        </KeyboardAvoidingView>
+                        </View>
                     </SafeAreaView>
 
                     <HistoryModal
