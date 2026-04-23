@@ -285,10 +285,12 @@ export function useChat() {
         setIsOpeningConversation(true);
         try {
             const bump = () => {
+                if (openGenRef.current !== gen) return;
                 updateFilteredMessages();
                 setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
             };
             const out = await chatController.openConversation(conversationId, bump);
+            if (openGenRef.current !== gen) return out;
             updateFilteredMessages();
             setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
             return out;

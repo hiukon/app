@@ -83,6 +83,7 @@ export default function DraggableChatBubble() {
     const [domainCodeToIdMap, setDomainCodeToIdMap] = useState({});
 
     const flatListRef = useRef(null);
+    const latestHistorySelectionRef = useRef(null);
     // ── Draggable bubble animation ────────────────────────────────────────────
     const translateX = useSharedValue(0);
     const translateY = useSharedValue(0);
@@ -202,7 +203,7 @@ export default function DraggableChatBubble() {
     const handleTextChange = (text) => {
         setInputText(text);
         if (!isListening) committedTextRef.current = text;
-        const cursorPos = text.length;
+        const cursorPos = Math.min(cursorPosition, text.length);
         const lastSlash = text.lastIndexOf('/', cursorPos);
         const lastAt = text.lastIndexOf('@', cursorPos);
         const triggers = [];
@@ -220,9 +221,20 @@ export default function DraggableChatBubble() {
         if (!isValidTrigger(active.index)) { if (showSuggestion) { setShowSuggestion(false); setSuggestionType(null); } return; }
 
         const afterTrigger = text.substring(active.index + 1, cursorPos);
-        if (afterTrigger === '') {
-            if (active.type === '/' && suggestionType !== 'skill') { setSuggestionType('skill'); loadSkills(); setShowSuggestion(true); }
-            else if (active.type === '@' && suggestionType !== 'domain') { setSuggestionType('domain'); loadDomains(); setShowSuggestion(true); }
+        if (/\s/.test(afterTrigger)) { if (showSuggestion) { setShowSuggestion(false); setSuggestionType(null); } return; }
+
+        if (active.type === '/') {
+            if (suggestionType !== 'skill' || !showSuggestion) {
+                setSuggestionType('skill');
+                loadSkills();
+            }
+            setShowSuggestion(true);
+        } else {
+            if (suggestionType !== 'domain' || !showSuggestion) {
+                setSuggestionType('domain');
+                loadDomains();
+            }
+            setShowSuggestion(true);
         }
     };
 
@@ -312,6 +324,19 @@ export default function DraggableChatBubble() {
     };
 
     const handleCitationPress = useCallback((data) => setCitationModal(data), []);
+    const handleHistorySelect = useCallback((conversationId) => {
+        latestHistorySelectionRef.current = conversationId;
+        setOpeningConversationId(conversationId);
+        openConversation(conversationId)
+            .then(() => {
+                if (latestHistorySelectionRef.current !== conversationId) return;
+                setInputText('');
+                setShowHistory(false);
+            })
+            .catch((error) => {
+                console.error('Open conversation error:', error);
+            });
+    }, [openConversation]);
 
     // ── Render helpers ────────────────────────────────────────────────────────
     // Find the interrupt question message id — prefer isInterruptMessage flag, fallback to last bot
@@ -360,14 +385,8 @@ export default function DraggableChatBubble() {
                     <MaterialIcons name={isCmd ? 'bolt' : 'chat-bubble-outline'} size={16} color={isCmd ? '#d97706' : '#4f46e5'} />
                 </View>
                 <TouchableOpacity
-                    onPress={async () => {
-                        setOpeningConversationId(item.id);
-                        await openConversation(item.id);
-                        setInputText('');
-                        setShowHistory(false);
-                    }}
-                    disabled={isOpeningConversation}
-                    style={{ flex: 1, opacity: isOpeningConversation && !isOpeningThisConversation ? 0.45 : 1 }}
+                    onPress={() => handleHistorySelect(item.id)}
+                    style={{ flex: 1 }}
                 >
                     <Text style={{ fontSize: 14, color: '#111827', fontWeight: '500', marginBottom: 4 }} numberOfLines={2}>{truncatedTitle}</Text>
                     <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -390,7 +409,7 @@ export default function DraggableChatBubble() {
                 </TouchableOpacity>
             </View>
         );
-    }, [domainIdToCodeMap, domainCodeToIdMap, openConversation, deleteConversation, isOpeningConversation, openingConversationId]);
+    }, [domainIdToCodeMap, domainCodeToIdMap, deleteConversation, isOpeningConversation, openingConversationId, handleHistorySelect]);
 
     return (
         <>
@@ -449,26 +468,6 @@ export default function DraggableChatBubble() {
                                     windowSize={21}
                                     removeClippedSubviews={false}
                                 />
-
-                                {isOpeningConversation && (
-                                    <View style={{ position: 'absolute', top: 16, left: 16, right: 16, alignItems: 'center' }}>
-                                        <View style={{ minWidth: 220, maxWidth: '100%', backgroundColor: 'rgba(15, 23, 42, 0.92)', borderRadius: 18, paddingHorizontal: 16, paddingVertical: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.25, shadowRadius: 18, elevation: 8 }}>
-                                            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
-                                                <View style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: 'rgba(59,130,246,0.18)', alignItems: 'center', justifyContent: 'center', marginRight: 10 }}>
-                                                    <ActivityIndicator size="small" color="#60a5fa" />
-                                                </View>
-                                                <View style={{ flexShrink: 1 }}>
-                                                    <Text style={{ color: 'white', fontSize: 14, fontWeight: '700' }}>
-                                                        Đang mở cuộc trò chuyện...
-                                                    </Text>
-                                                    <Text style={{ color: '#cbd5e1', fontSize: 12, marginTop: 2 }}>
-                                                        Vui lòng chờ trong giây lát
-                                                    </Text>
-                                                </View>
-                                            </View>
-                                        </View>
-                                    </View>
-                                )}
                             </View>
 
                             <ChatInputArea

@@ -48,16 +48,19 @@ export default function CitationModal({ citationModal, onClose }) {
     const p = citationModal?.passage;
     const fullText = p?.text || p?.content || p?.chunk_text || p?.passage_text || '';
 
-    // Track keyboard height to shrink sheet so content is never covered
     useEffect(() => {
         const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
         const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-        const showSub = Keyboard.addListener(showEvt, (e) => setKeyboardHeight(e.endCoordinates.height));
+        const showSub = Keyboard.addListener(showEvt, (e) => {
+            setKeyboardHeight(Platform.OS === 'ios' ? e.endCoordinates.height : 0);
+        });
         const hideSub = Keyboard.addListener(hideEvt, () => setKeyboardHeight(0));
         return () => { showSub.remove(); hideSub.remove(); };
     }, []);
 
-    const sheetHeight = Math.max(SHEET_MAX - keyboardHeight, 200);
+    const sheetHeight = Platform.OS === 'ios'
+        ? Math.max(SHEET_MAX - keyboardHeight, 200)
+        : SHEET_MAX;
 
     const matchPositions = useMemo(() => {
         if (!searchQuery.trim() || !fullText) return [];
@@ -71,7 +74,6 @@ export default function CitationModal({ citationModal, onClose }) {
 
     const matchCount = matchPositions.length;
 
-    // Map each match index → which line it belongs to (for scrolling)
     const matchToLine = useMemo(() => {
         if (!matchPositions.length || !fullText) return [];
         const lines = fullText.split('\n');
@@ -85,7 +87,6 @@ export default function CitationModal({ citationModal, onClose }) {
         });
     }, [matchPositions, fullText]);
 
-    // Auto-scroll to the line containing the current match
     useEffect(() => {
         if (!searchQuery.trim() || matchCount === 0 || !scrollViewRef.current) return;
         const lineIdx = matchToLine[matchIndex];
@@ -95,7 +96,7 @@ export default function CitationModal({ citationModal, onClose }) {
             scrollViewRef.current?.scrollTo({ y: Math.max(0, y - 60), animated: true });
         }, 80);
         return () => clearTimeout(timer);
-    }, [matchIndex, searchQuery, matchCount]);
+    }, [matchIndex, searchQuery, matchCount, matchToLine]);
 
     const renderHighlighted = () => {
         if (!searchQuery.trim() || !fullText) return null;
@@ -116,7 +117,8 @@ export default function CitationModal({ citationModal, onClose }) {
                         key={i}
                         style={{
                             backgroundColor: isCurrent ? '#fb923c' : '#fef08a',
-                            color: '#111827', fontWeight: '700',
+                            color: '#111827',
+                            fontWeight: '700',
                         }}
                     >
                         {part}
@@ -144,8 +146,8 @@ export default function CitationModal({ citationModal, onClose }) {
         onClose();
     };
 
-    const handleSearchChange = (t) => {
-        setSearchQuery(t);
+    const handleSearchChange = (text) => {
+        setSearchQuery(text);
         setMatchIndex(0);
     };
 
@@ -159,28 +161,25 @@ export default function CitationModal({ citationModal, onClose }) {
         >
             <View style={{ flex: 1, justifyContent: 'flex-end' }}>
                 <TouchableOpacity
-                    style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)' }}
+                    style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)' }}
                     activeOpacity={1}
                     onPress={handleClose}
                 />
                 <KeyboardAvoidingView
-                    behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                    behavior={Platform.OS === 'ios' ? 'padding' : undefined}
                     style={{
                         height: sheetHeight,
                         backgroundColor: 'white',
-                        borderTopLeftRadius: 20, borderTopRightRadius: 20,
-                        shadowColor: '#000', shadowOffset: { width: 0, height: -4 },
-                        shadowOpacity: 0.15, shadowRadius: 12, elevation: 20,
+                        borderTopLeftRadius: 20,
+                        borderTopRightRadius: 20,
+                        shadowColor: '#000',
+                        shadowOffset: { width: 0, height: -4 },
+                        shadowOpacity: 0.15,
+                        shadowRadius: 12,
+                        elevation: 20,
                     }}
                 >
-                    <SafeAreaView
-                        onStartShouldSetResponder={() => true}
-                        style={{
-                            flex: 1,
-                            backgroundColor: 'white',
-                        }}
-                    >
-                        {/* Header (pinned) */}
+                    <SafeAreaView style={{ flex: 1, backgroundColor: 'white' }}>
                         <View style={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: '#f3f4f6' }}>
                             <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
                                 <Text style={{ fontSize: 15, fontWeight: '700', color: '#111827', flex: 1 }}>
@@ -196,12 +195,15 @@ export default function CitationModal({ citationModal, onClose }) {
                                 </TouchableOpacity>
                             </View>
 
-                            {/* Search bar — pinned at top */}
                             <View style={{
-                                flexDirection: 'row', alignItems: 'center',
-                                backgroundColor: '#f8fafc', borderRadius: 10,
-                                borderWidth: 1, borderColor: searchQuery ? '#2563eb' : '#e5e7eb',
-                                paddingHorizontal: 10, height: 40,
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                backgroundColor: '#f8fafc',
+                                borderRadius: 10,
+                                borderWidth: 1,
+                                borderColor: searchQuery ? '#2563eb' : '#e5e7eb',
+                                paddingHorizontal: 10,
+                                height: 40,
                             }}>
                                 <MaterialIcons name="search" size={16} color={searchQuery ? '#2563eb' : '#9ca3af'} />
                                 <TextInput
@@ -212,6 +214,8 @@ export default function CitationModal({ citationModal, onClose }) {
                                     onChangeText={handleSearchChange}
                                     returnKeyType="search"
                                     clearButtonMode="while-editing"
+                                    autoCorrect={false}
+                                    autoCapitalize="none"
                                 />
                                 {searchQuery.length > 0 && (
                                     <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -233,13 +237,13 @@ export default function CitationModal({ citationModal, onClose }) {
                             </View>
                         </View>
 
-                        {/* Scrollable content */}
                         <ScrollView
                             ref={scrollViewRef}
-                            style={{ flex: 1, maxHeight: SHEET_MAX - 150 - keyboardHeight }}
+                            style={{ flex: 1 }}
                             contentContainerStyle={{ padding: 16, paddingBottom: 16 }}
                             showsVerticalScrollIndicator
-                            keyboardShouldPersistTaps="handled"
+                            keyboardShouldPersistTaps="always"
+                            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'none'}
                         >
                             {!fullText ? (
                                 <View style={{ alignItems: 'center', paddingVertical: 32 }}>
@@ -257,7 +261,6 @@ export default function CitationModal({ citationModal, onClose }) {
                             )}
                         </ScrollView>
 
-                        {/* Footer */}
                         <View style={{
                             borderTopWidth: 1, borderTopColor: '#f3f4f6',
                             paddingHorizontal: 16, paddingVertical: 10,
