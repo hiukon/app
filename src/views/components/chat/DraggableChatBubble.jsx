@@ -225,12 +225,14 @@ export default function DraggableChatBubble() {
 
         if (active.type === '/') {
             if (suggestionType !== 'skill' || !showSuggestion) {
+                Keyboard.dismiss();
                 setSuggestionType('skill');
                 loadSkills();
             }
             setShowSuggestion(true);
         } else {
             if (suggestionType !== 'domain' || !showSuggestion) {
+                Keyboard.dismiss();
                 setSuggestionType('domain');
                 loadDomains();
             }
@@ -484,7 +486,10 @@ export default function DraggableChatBubble() {
                                 ringStyle={ringStyle}
                                 onPickFile={pickFile}
                                 onToggleVoice={() => isListening ? stopListening() : startListening(inputText)}
-                                onToggleModelPicker={() => setShowModelPicker(true)}
+                                onToggleModelPicker={() => {
+                                    Keyboard.dismiss(); // Thêm dòng này để ẩn bàn phím trước
+                                    setShowModelPicker(true);
+                                }}
                                 onSend={handleSendMessage}
                                 onCancel={cancel}
                             />
