@@ -14,8 +14,9 @@
     ],
     "ios": {
       "supportsTablet": true,
+      "requireFullScreen": true,
       "bundleIdentifier": "com.hanobrain.app",
-      "icon": "./src/assets/images/chatbot.png",
+      "icon": "./src/assets/images/thanh_uy.png",
       "infoPlist": {
         "NSSpeechRecognitionUsageDescription": "Allow HaNoiBrain to recognize your speech",
         "NSMicrophoneUsageDescription": "Allow HaNoiBrain to access your microphone for voice input",
@@ -24,6 +25,7 @@
       }
     },
     "android": {
+      "icon": "./src/assets/images/thanh_uy.png",
       "adaptiveIcon": {
         "backgroundColor": "#ffffff"
       },
@@ -32,7 +34,8 @@
         "android.permission.RECORD_AUDIO",
         "android.permission.INTERNET",
         "android.permission.DETECT_SCREEN_CAPTURE"
-      ]
+      ],
+      "softwareKeyboardLayoutMode": "pan"
     },
     "web": {},
     "extra": {
