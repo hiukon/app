@@ -516,12 +516,14 @@ export default function DraggableChatBubble() {
                         icon={suggestionType === 'skill' ? 'bolt' : 'folder-open'}
                         emptyMessage="Không tìm thấy kết quả"
                     />
-
                     <ModelPickerModal
                         visible={showModelPicker}
                         selectedModel={selectedModel}
                         onSelectModel={setSelectedModel}
-                        onClose={() => setShowModelPicker(false)}
+                        onClose={() => {
+                            Keyboard.dismiss(); // Thêm dòng này để ẩn bàn phím trước
+                            setShowModelPicker(false);
+                        }}
                     />
 
                     <CitationModal citationModal={citationModal} onClose={() => setCitationModal(null)} />
