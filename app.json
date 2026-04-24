@@ -16,7 +16,7 @@
       "supportsTablet": true,
       "requireFullScreen": true,
       "bundleIdentifier": "com.hanobrain.app",
-      "icon": "./src/assets/images/T.png",
+      "icon": "./src/assets/images/n.png",
       "infoPlist": {
         "NSSpeechRecognitionUsageDescription": "Allow HaNoiBrain to recognize your speech",
         "NSMicrophoneUsageDescription": "Allow HaNoiBrain to access your microphone for voice input",
@@ -25,7 +25,7 @@
       }
     },
     "android": {
-      "icon": "./src/assets/images/T.png",
+      "icon": "./src/assets/images/n.png",
       "adaptiveIcon": {
         "backgroundColor": "#ffffff"
       },
