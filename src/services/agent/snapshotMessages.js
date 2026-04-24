@@ -109,6 +109,7 @@ export function mapSnapshotToChatRows(messages) {
                     interruptData: {
                         id: m.id || m.metadata?.interrupt_id || id,
                         run_id: m.metadata?.run_id || null,
+                        original_message_id: m.metadata?.original_message_id || m.original_message_id || null,
                         question: interruptPayload?.question || m.content,
                         options: Array.isArray(interruptPayload?.options) ? interruptPayload.options
                             : (Array.isArray(m.metadata?.options) ? m.metadata.options : []),

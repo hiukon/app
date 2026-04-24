@@ -447,7 +447,7 @@ export default function DraggableChatBubble() {
                                     <TouchableOpacity onPress={openHistory} style={{ marginRight: 12 }}>
                                         <MaterialIcons name="history" size={24} color="white" />
                                     </TouchableOpacity>
-                                    <TouchableOpacity onPress={() => { newConversation(); setInputText(''); setModalVisible(false); setSelectedSuggestions({}); }}>
+                                    <TouchableOpacity onPress={() => { setInputText(''); setModalVisible(false); setSelectedSuggestions({}); }}>
                                         <MaterialIcons name="close" size={24} color="white" />
                                     </TouchableOpacity>
                                 </View>

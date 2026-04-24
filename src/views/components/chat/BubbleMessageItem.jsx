@@ -1,4 +1,4 @@
-import React, { memo, useMemo, useState, useRef } from 'react';
+import React, { memo, useMemo, useState, useRef, useEffect } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, TextInput } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -29,13 +29,40 @@ const MD_STYLES = {
 };
 
 // Inline interrupt UI embedded inside the bot bubble
-function InlineInterrupt({ pendingInterrupt, answerInterrupt, isSending, isAnswered = false }) {
-    const [selectedIndices, setSelectedIndices] = useState([]);
-    const [customText, setCustomText] = useState('');
+function InlineInterrupt({ pendingInterrupt, answerInterrupt, isSending, isAnswered = false, initialSelectedIndices = [], initialSelectedText = '' }) {
+    // Khi isAnswered, tính toán initialSelectedIndices từ initialSelectedText
+    const opts = (pendingInterrupt.options || []).filter(o => o?.trim());
+
+    let initialIndices = initialSelectedIndices;
+    if (isAnswered && initialSelectedText && initialIndices.length === 0) {
+        // Parse initialSelectedText để tìm option indices
+        // initialSelectedText có format "A: Option A, B: Option B" hoặc "Option A, Option B"
+        const selectedTexts = initialSelectedText
+            .split(',')
+            .map(s => s.trim())
+            .filter(Boolean);
+
+        initialIndices = [];
+        selectedTexts.forEach(text => {
+            // Remove label prefix if exists (e.g., "A: " from "A: Option A")
+            const cleanText = text.replace(/^[A-Z]:\s*/, '').trim();
+            const idx = opts.findIndex(o => o.trim() === cleanText);
+            if (idx >= 0) {
+                initialIndices.push(idx);
+            }
+        });
+    }
+
+    const [selectedIndices, setSelectedIndices] = useState(initialIndices);
+    const [customText, setCustomText] = useState(initialSelectedText);
     const [loading, setLoading] = useState(false);
+    const [submitted, setSubmitted] = useState(isAnswered);
     const submittingRef = useRef(false);
 
-    const opts = (pendingInterrupt.options || []).filter(o => o?.trim());
+    useEffect(() => {
+        if (isAnswered) setSubmitted(true);
+    }, [isAnswered]);
+
     const isApproval = ['human_approval', 'database_modification', 'multi_step_confirm', 'error_recovery']
         .includes(pendingInterrupt.reason);
     const displayOpts = opts.length > 0 ? opts : (isApproval ? ['Đồng ý', 'Từ chối'] : []);
@@ -47,9 +74,10 @@ function InlineInterrupt({ pendingInterrupt, answerInterrupt, isSending, isAnswe
         .filter(Boolean);
     const submitPayload = selectedTexts.length > 0
         ? {
-            selected: selectedOptionLabels,
+            selected: selectedTexts,
+            selectedDisplay: selectedOptionLabels,
             custom: '',
-            displayText: selectedOptionLabels.join(', '),
+            displayText: selectedTexts.join(', '),
         }
         : {
             selected: [],
@@ -58,7 +86,7 @@ function InlineInterrupt({ pendingInterrupt, answerInterrupt, isSending, isAnswe
         };
 
     const handleOptionClick = (idx) => {
-        if (isAnswered) return;
+        if (isAnswered || submitted) return;
         setSelectedIndices(prev =>
             prev.includes(idx)
                 ? prev.filter(i => i !== idx)
@@ -68,26 +96,29 @@ function InlineInterrupt({ pendingInterrupt, answerInterrupt, isSending, isAnswe
     };
 
     const handleCustomChange = (t) => {
-        if (isAnswered) return;
+        if (isAnswered || submitted) return;
         setCustomText(t);
         setSelectedIndices([]);
     };
 
     const handleSubmit = async () => {
-        if (isAnswered || !submitPayload.displayText || isSending || loading || submittingRef.current || !answerInterrupt) return;
+        if (isAnswered || submitted || !submitPayload.displayText || isSending || loading || submittingRef.current || !answerInterrupt) return;
         submittingRef.current = true;
+        setSubmitted(true);
         setLoading(true);
         try {
             await answerInterrupt(submitPayload);
         } catch (err) {
             console.error('🔘 INLINE INTERRUPT - Error:', err);
+            setSubmitted(false);
         } finally {
             submittingRef.current = false;
             setLoading(false);
         }
     };
 
-    const isDisabledAll = isAnswered || isSending || loading;
+    const isLocked = isAnswered || submitted;
+    const isDisabledAll = isLocked || isSending || loading;
 
     return (
         <View style={{ marginTop: 10, borderTopWidth: 1, borderTopColor: '#f0f0f0', paddingTop: 10 }}>
@@ -99,27 +130,27 @@ function InlineInterrupt({ pendingInterrupt, answerInterrupt, isSending, isAnswe
                         key={idx}
                         onPress={() => handleOptionClick(idx)}
                         disabled={isDisabledAll}
-                        activeOpacity={isAnswered ? 1 : 0.7}
+                        activeOpacity={isLocked ? 1 : 0.7}
                         style={{
                             flexDirection: 'row', alignItems: 'center',
                             paddingVertical: 9, paddingHorizontal: 10,
                             borderRadius: 10, marginBottom: 6,
-                            backgroundColor: isAnswered ? '#f3f4f6' : (isSelected ? '#ede9fe' : '#f8f8ff'),
+                            backgroundColor: isLocked ? '#f3f4f6' : (isSelected ? '#ede9fe' : '#f8f8ff'),
                             borderWidth: 1.5,
-                            borderColor: isAnswered ? '#e5e7eb' : (isSelected ? '#7c3aed' : '#d1d5db'),
-                            opacity: isAnswered ? 0.6 : 1,
+                            borderColor: isLocked ? '#e5e7eb' : (isSelected ? '#7c3aed' : '#d1d5db'),
+                            opacity: isLocked ? 0.6 : 1,
                         }}
                     >
                         <View style={{
                             width: 22, height: 22, borderRadius: 11,
-                            backgroundColor: isAnswered ? '#e5e7eb' : (isSelected ? '#7c3aed' : '#ede9fe'),
+                            backgroundColor: isLocked ? '#e5e7eb' : (isSelected ? '#7c3aed' : '#ede9fe'),
                             alignItems: 'center', justifyContent: 'center', marginRight: 10, flexShrink: 0,
                         }}>
-                            <Text style={{ fontSize: 11, fontWeight: '700', color: isAnswered ? '#9ca3af' : (isSelected ? 'white' : '#7c3aed') }}>
+                            <Text style={{ fontSize: 11, fontWeight: '700', color: isLocked ? '#9ca3af' : (isSelected ? 'white' : '#7c3aed') }}>
                                 {String.fromCharCode(65 + idx)}
                             </Text>
                         </View>
-                        <Text style={{ flex: 1, fontSize: 13, lineHeight: 19, color: isAnswered ? '#9ca3af' : '#1f2937', fontWeight: isSelected ? '600' : '400' }}>
+                        <Text style={{ flex: 1, fontSize: 13, lineHeight: 19, color: isLocked ? '#9ca3af' : '#1f2937', fontWeight: isSelected ? '600' : '400' }}>
                             {opt}
                         </Text>
                     </TouchableOpacity>
@@ -128,7 +159,7 @@ function InlineInterrupt({ pendingInterrupt, answerInterrupt, isSending, isAnswe
 
             {/* Bottom area */}
             <View style={{ marginTop: 4 }}>
-                {isAnswered ? (
+                {isLocked ? (
                     /* Answered lock indicator */
                     <View style={{
                         flexDirection: 'row', alignItems: 'center',
@@ -282,19 +313,10 @@ const BubbleMessageItem = memo(({
     // 2. item.meta?.interruptData (from cache with full interrupt data)
     // 3. item.meta?.interrupt_payload (from server snapshot with options in payload)
     // 4. item.meta?.options (fallback for other structures)
-    const interruptData = pendingInterrupt || item.meta?.interruptData ||
-        (item.meta?.interrupt_payload && {
-            question: item.meta.interrupt_payload.question || item.text,
-            options: item.meta.interrupt_payload.options || [],
-            reason: item.meta.interrupt_payload.reason || 'information_gathering',
-        }) ||
-        (item.meta?.options && {
-            question: item.text,
-            options: item.meta.options,
-            reason: item.meta?.reason || 'information_gathering',
-        });
+    const interruptData = pendingInterrupt || item.meta?.interruptData || null;
     const showInterrupt = !isUser && !!interruptData;
-    const isAnswered = !!item.meta?.answered;
+    // isAnswered = true nếu interrupt đã có dữ liệu trả lời trong meta (từ lịch sử)
+    const isAnswered = !pendingInterrupt && !!item.meta?.interruptData && !!item.meta?.selectedInterrupt;
 
     return (
         <TouchableOpacity
@@ -328,6 +350,8 @@ const BubbleMessageItem = memo(({
                                         }
                                         isSending={isSending}
                                         isAnswered={isAnswered}
+                                        initialSelectedIndices={[]}
+                                        initialSelectedText={item.meta?.selectedInterrupt?.text || ''}
                                     />
                                 )}
 

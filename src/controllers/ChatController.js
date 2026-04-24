@@ -68,6 +68,7 @@ class ChatController {
     constructor() {
         this.chatModel = new ChatModel();
         this.ensureWelcomeMessage();
+        this._originalMessageId = null;
         this.conversationId = null;
         this.runId = null;
         this.pendingInterrupt = null;
@@ -80,6 +81,8 @@ class ChatController {
         this._currentAssistantId = null;
         this._resumeInterruptContext = null;
         this._bgStreams = new Map();
+        this._answeredInterruptIds = new Set();
+        this._lastOutboundMessageId = null;
     }
 
     _cleanupEmptyStreamingAssistants() {
@@ -116,56 +119,116 @@ class ChatController {
         onMessagesUpdate?.();
     }
 
-    // After loading a snapshot into chatModel, set answered/pending state for each interrupt message.
-    // If there is any response (user or bot) after the interrupt → mark it answered (client-side flag).
-    // If no response follows → treat it as still pending and restore pendingInterrupt.
-    _applyInterruptStateFromRows(rows) {
-        this.pendingInterrupt = null;
+    _getInterruptId(source) {
+        return (
+            source?.meta?.interruptData?.id ||
+            source?.meta?.interrupt_id ||
+            source?.interrupt_id ||
+            source?.id ||
+            null
+        );
+    }
+
+    _cleanupAnsweredInterrupts(rows = [], { persist = true } = {}) {
+        if (!Array.isArray(rows) || rows.length === 0) return [];
+
+        const answeredIds = new Set(this._answeredInterruptIds);
+
         for (let i = 0; i < rows.length; i++) {
-            if (!rows[i].isInterruptMessage) continue;
+            const row = rows[i];
+            if (!row?.isInterruptMessage) continue;
+            // ✅ NẾU ĐÃ LƯVÀO META THÌ KHÔNG XÓA
+            if (row.meta?.selectedInterrupt) continue;
+
+            const interruptId = this._getInterruptId(row);
             const hasAnswerAfter = rows.slice(i + 1).some(
                 r => r.isUser || (!r.isUser && !r.isInterruptMessage && `${r.text || ''}`.trim())
             );
-            const msg = this.chatModel.getMessages().find(m => m.id === rows[i].id);
-            if (hasAnswerAfter) {
-                if (msg) this.chatModel.updateMessage(rows[i].id, { meta: { ...(msg.meta || {}), answered: true } });
-            } else if (rows[i].meta?.interruptData) {
-                this.pendingInterrupt = rows[i].meta.interruptData;
-                if (rows[i].meta.interruptData.run_id) this.runId = rows[i].meta.interruptData.run_id;
+            if (interruptId && hasAnswerAfter) answeredIds.add(interruptId);
+        }
+
+        if (persist) this._answeredInterruptIds = answeredIds;
+
+        return rows.filter((row) => {
+            if (!row?.isInterruptMessage) return true;
+            // ✅ KHÔNG FILTER NẾU CÓ SAVED INTERRUPT
+            if (row.meta?.selectedInterrupt) return true;
+
+            const interruptId = this._getInterruptId(row);
+            return !(interruptId && answeredIds.has(interruptId));
+        });
+    }
+
+    _applyInterruptStateFromRows(rows) {
+        this.pendingInterrupt = null;
+        const cleanedRows = this._cleanupAnsweredInterrupts(rows, { persist: true });
+        for (let i = 0; i < cleanedRows.length; i++) {
+            if (!cleanedRows[i].isInterruptMessage) continue;
+            if (cleanedRows[i].meta?.interruptData) {
+                this.pendingInterrupt = cleanedRows[i].meta.interruptData;
+                if (cleanedRows[i].meta.interruptData.run_id) this.runId = cleanedRows[i].meta.interruptData.run_id;
             }
         }
     }
 
     _mergeInterruptIntoSnapshot(rows) {
-        const ctx = this._resumeInterruptContext;
-        if (!ctx) return rows;
+        // ✅ MERGE MESSAGE INTERRUPT CÓ SAVED DATA TỪ PREVIOUS STATE
+        const oldMessages = this.chatModel.getMessages();
+        const savedInterrupts = oldMessages.filter(m => m.isInterruptMessage && m.meta?.selectedInterrupt);
 
-        const result = [...rows];
+        if (savedInterrupts.length === 0) return rows;
 
-        const toInsert = [];
-        for (const im of (ctx.interruptMsgs || [])) {
-            const existingIdx = result.findIndex(r => !r.isUser && r.text === im.text);
+        // Chỉ merge vào message đã có trong snapshot, không add message mới
+        const merged = [...rows];
+
+        for (const savedMsg of savedInterrupts) {
+            const savedId = savedMsg.meta?.selectedInterrupt?.interrupt_id;
+
+            // Tìm message có cùng interrupt_id hoặc question text tương tự
+            const existingIdx = merged.findIndex(r => {
+                // Match by interrupt_id (ưu tiên)
+                if (savedId && r.meta?.interruptData?.id === savedId) return true;
+                if (savedId && r.meta?.interrupt_id === savedId) return true;
+                // Match by ID (fallback)
+                if (r.id === savedMsg.id) return true;
+                // Match by question text (fallback)
+                if (r.text && savedMsg.text && r.text.trim() === savedMsg.text.trim()) return true;
+                return false;
+            });
+
             if (existingIdx >= 0) {
-                // Merge our meta (including answered flag) into the snapshot row
-                result[existingIdx] = {
-                    ...result[existingIdx],
-                    isInterruptMessage: true,
-                    meta: { ...result[existingIdx].meta, ...im.meta },
+                // Merge meta vào message đã có
+                merged[existingIdx].meta = {
+                    ...merged[existingIdx].meta,
+                    selectedInterrupt: savedMsg.meta.selectedInterrupt,
+                    interruptData: savedMsg.meta.interruptData || merged[existingIdx].meta?.interruptData,
                 };
-            } else {
-                toInsert.push({ ...im });
+                merged[existingIdx].isInterruptMessage = true;
             }
         }
-        if (ctx.selectionMsg) {
-            const alreadyIn = result.some(r => r.isUser && r.text === ctx.selectionMsg.text);
-            if (!alreadyIn) toInsert.push({ ...ctx.selectionMsg });
-        }
-        if (toInsert.length === 0) return result;
 
-        const lastBotIdx = result.reduce((acc, r, i) => (r.isUser ? acc : i), -1);
-        const insertAt = lastBotIdx >= 0 ? lastBotIdx : result.length;
-        result.splice(insertAt, 0, ...toInsert);
-        return result;
+        return merged;
+    }
+
+    _findLatestUserRequestMessageId() {
+        const rows = this.chatModel.getMessages();
+        for (let i = rows.length - 1; i >= 0; i -= 1) {
+            const requestMessageId = rows[i]?.meta?.request_message_id;
+            if (requestMessageId) return requestMessageId;
+        }
+        return null;
+    }
+
+    _resolveResumeMessageId(interrupt = null) {
+        return (
+            interrupt?.original_message_id ||
+            interrupt?.meta?.original_message_id ||
+            this._originalMessageId ||
+            this._lastOutboundMessageId ||
+            this._resumeInterruptContext?.message_id ||
+            this._findLatestUserRequestMessageId() ||
+            null
+        );
     }
 
     _ensureStreamingPlaceholder() {
@@ -356,81 +419,10 @@ class ChatController {
     static CACHE_VERSION = 'v5';
 
     async _saveConversationToCache() {
-        if (!this.conversationId) return;
-        try {
-            const messages = this.chatModel.getMessages();
-            if (messages.length === 0) return;
-            const key = `conv_${ChatController.CACHE_VERSION}_${this.conversationId}`;
-            const cacheData = {
-                messages,
-                pendingInterrupt: this.pendingInterrupt || null,
-                runId: this.runId || null,
-                conversationId: this.conversationId || null,
-            };
-            // DEBUG
-            const interruptMsgs = messages.filter(m => m.isInterruptMessage);
-            if (interruptMsgs.length > 0) {
-                console.log('💾 SAVE CACHE - Interrupt messages:', {
-                    total: messages.length,
-                    interruptCount: interruptMsgs.length,
-                    interruptMsgs: interruptMsgs.map(m => ({
-                        id: m.id,
-                        text: m.text?.substring(0, 50),
-                        hasMeta: !!m.meta,
-                        metaKeys: m.meta ? Object.keys(m.meta) : [],
-                    })),
-                });
-            }
-            await AsyncStorage.setItem(key, JSON.stringify(cacheData));
-        } catch (error) {
-            console.error('Cache error:', error);
-        }
+        return;
     }
 
     async _loadConversationFromCache(conversationId) {
-        try {
-            const key = `conv_${ChatController.CACHE_VERSION}_${conversationId}`;
-            const cached = await AsyncStorage.getItem(key);
-            if (cached) {
-                const cacheData = JSON.parse(cached);
-                const messages = Array.isArray(cacheData) ? cacheData : (cacheData.messages || []);
-                // DEBUG
-                const interruptMsgs = messages.filter(m => m.isInterruptMessage);
-                if (interruptMsgs.length > 0) {
-                    console.log('📂 LOAD CACHE - Interrupt messages:', {
-                        total: messages.length,
-                        interruptCount: interruptMsgs.length,
-                        interruptMsgs: interruptMsgs.map(m => ({
-                            id: m.id,
-                            text: m.text?.substring(0, 50),
-                            hasMeta: !!m.meta,
-                            metaKeys: m.meta ? Object.keys(m.meta) : [],
-                        })),
-                    });
-                }
-                this.chatModel.clearMessages();
-                messages.forEach(msg => this.chatModel.addMessage(msg));
-
-                // ✅ Restore runId từ cache
-                this.runId = cacheData.runId || null;
-
-                // ✅ Restore pendingInterrupt từ cache hoặc tái tạo từ interrupt message metadata
-                if (cacheData.pendingInterrupt !== undefined) {
-                    this.pendingInterrupt = cacheData.pendingInterrupt;
-                } else {
-                    // Tìm interrupt message và tái tạo pendingInterrupt từ meta.interruptData
-                    const interruptMsg = messages.find(m => m.isInterruptMessage);
-                    if (interruptMsg && interruptMsg.meta?.interruptData) {
-                        this.pendingInterrupt = interruptMsg.meta.interruptData;
-                    } else {
-                        this.pendingInterrupt = null;
-                    }
-                }
-                return true;
-            }
-        } catch (error) {
-            console.error('Load cache error:', error);
-        }
         return false;
     }
 
@@ -469,7 +461,7 @@ class ChatController {
                 allowReconnect: true,
                 onSnapshot: (list) => {
                     if (list && list.length > 0) {
-                        const rows = mapSnapshotToChatRows(list);
+                        const rows = this._cleanupAnsweredInterrupts(mapSnapshotToChatRows(list), { persist: true });
                         this.chatModel.clearMessages();
                         rows.forEach((r) => this.chatModel.addMessage(r));
                         this._applyInterruptStateFromRows(rows);
@@ -746,6 +738,8 @@ class ChatController {
                     hasArtifacts: ev.artifacts?.length,
                     hasCitations: ev.metadata?.citations?.length,
                     textLength: readEventText(ev).length,
+                    interruptData: ev.interrupt ? JSON.stringify(ev.interrupt) : null,  // ✅ THÊM
+                    original_message_id: ev.interrupt?.original_message_id,              // ✅ THÊM
                     runId: this.runId
                 });
 
@@ -753,6 +747,15 @@ class ChatController {
 
                 // ==================== XỬ LÝ INTERRUPT ====================
                 if (ev.outcome === 'interrupt') {
+                    if (ev.interrupt && !ev.interrupt.original_message_id) {
+                        ev.interrupt.original_message_id = this._resolveResumeMessageId(ev.interrupt);
+                    }
+                    console.log('🔍 Processing interrupt, ev.interrupt:', JSON.stringify(ev.interrupt, null, 2));
+                    if (ev.interrupt?.original_message_id) {
+                        this._originalMessageId = ev.interrupt.original_message_id;
+
+                        console.log('📝 Saved original_message_id from main RUN_FINISHED:', this._originalMessageId);
+                    }
                     // Clean up any in-progress streaming message
                     if (this._currentAssistantId) {
                         const cur = this.chatModel.getMessages().find(m => m.id === this._currentAssistantId);
@@ -955,10 +958,18 @@ class ChatController {
                 const interruptData = ev.interrupt || ev.data || {
                     id: ev.interrupt_id,
                     run_id: ev.run_id,
+                    original_message_id: ev.original_message_id || ev.data?.original_message_id || null,
                     question: ev.text || ev.data?.text || 'Cần xác nhận từ bạn.',
                     options: ev.options || ev.data?.options || [],
                     reason: ev.reason || 'information_gathering',
                 };
+                if (!interruptData.original_message_id) {
+                    interruptData.original_message_id = this._resolveResumeMessageId(interruptData);
+                }
+                if (interruptData.original_message_id) {
+                    this._originalMessageId = interruptData.original_message_id;
+                    console.log('📝 Saved original_message_id:', this._originalMessageId);
+                }
 
                 // Preserve options from RUN_FINISHED if this event has none
                 const newOptions = interruptData.options || [];
@@ -1015,6 +1026,8 @@ class ChatController {
 
             case 'HITL_ANSWER_RECEIVED': {
                 this._hitlAnswerReceived = true;
+                const answeredInterruptId = this._getInterruptId(this.pendingInterrupt || ev.interrupt || ev.data);
+                if (answeredInterruptId) this._answeredInterruptIds.add(answeredInterruptId);
                 this.pendingInterrupt = null;
 
                 const interruptPayload = ev.interrupt?.payload || ev.data?.payload || {};
@@ -1038,10 +1051,9 @@ class ChatController {
                     }
                 }
 
-                for (const im of this.chatModel.getMessages().filter(m => m.isInterruptMessage)) {
-                    this.chatModel.updateMessage(im.id, { meta: { ...(im.meta || {}), answered: true } });
-                }
-
+                const cleanedRows = this._cleanupAnsweredInterrupts(this.chatModel.getMessages(), { persist: true });
+                this.chatModel.clearMessages();
+                cleanedRows.forEach((r) => this.chatModel.addMessage(r));
                 this._saveConversationToCache();
                 onMessagesUpdate?.();
                 break;
@@ -1115,13 +1127,20 @@ class ChatController {
             return { messages: this.chatModel.getMessages() };
         }
 
+        const requestMessageId = randomUuid();
+        this._lastOutboundMessageId = requestMessageId;
+        this._originalMessageId = requestMessageId;
+
         let userMessage = null;
         if (!options?.skipUserMessage) {
-            const userMeta = options?.attachments?.length ? { attachments: options.attachments } : null;
+            const userMeta = {
+                ...(options?.attachments?.length ? { attachments: options.attachments } : {}),
+                request_message_id: requestMessageId,
+            };
             userMessage = this.chatModel.addMessage({
                 text,
                 isUser: true,
-                ...(userMeta ? { meta: userMeta } : {}),
+                meta: userMeta,
             });
             onMessagesUpdate?.();
         }
@@ -1138,7 +1157,7 @@ class ChatController {
             agent: mappedAgent,
             agent_type: 'single',
             message: text,
-            message_id: randomUuid(),
+            message_id: requestMessageId,
             context: defaultViewingContext(),
             user_time_zone: Intl.DateTimeFormat?.().resolvedOptions?.().timeZone || 'Asia/Ho_Chi_Minh',
         };
@@ -1189,10 +1208,11 @@ class ChatController {
         console.log('🔁 CONVERSATION ID:', this.conversationId);
         console.log('🔁 RUN ID:', this.runId);
         console.log('🔁 INTERRUPT ID:', this.pendingInterrupt?.id);
+        console.log('🔁 ORIGINAL MESSAGE ID:', this._originalMessageId);  // ✅ Log để debug
+
         if (!USE_AGENT_CHAT) return { messages: this.chatModel.getMessages() };
 
         const intr = this.pendingInterrupt;
-        // Recover runId from interrupt data if missing
         if (!this.runId && intr) {
             this.runId = intr.run_id || intr.runId || null;
         }
@@ -1205,8 +1225,6 @@ class ChatController {
             return { messages: this.chatModel.getMessages() };
         }
 
-        // Clear immediately so bump() callbacks during streaming don't restore the interrupt UI
-        this.pendingInterrupt = null;
         this._hitlAnswerReceived = false;
 
         const token = apiClient.getAuthToken();
@@ -1218,52 +1236,32 @@ class ChatController {
             onMessagesUpdate?.();
             return { messages: this.chatModel.getMessages() };
         }
-
+        const messageIdToUse = this._resolveResumeMessageId(intr);
+        if (!messageIdToUse) {
+            this.chatModel.addMessage({
+                text: 'Khong the xac dinh message_id goc de tiep tuc lua chon.',
+                isUser: false,
+                status: 'error',
+            });
+            onMessagesUpdate?.();
+            return { messages: this.chatModel.getMessages() };
+        }
+        // ✅ FIX: Giống hệt Web request format
         const body = {
             conversation_id: this.conversationId,
             run_id: this.runId,
-            resume: { interrupt_id: intr.id || intr.interrupt_id, payload: resumePayload },
-            message_id: intr.id || intr.interrupt_id || randomUuid(),
+            message_id: messageIdToUse,  // ✅ BẮT BUỘC phải có
+            resume: {
+                interrupt_id: intr.id || intr.interrupt_id,
+                payload: resumePayload
+            },
+            user_time_zone: Intl.DateTimeFormat?.().resolvedOptions?.().timeZone || 'Asia/Ho_Chi_Minh',
+            // ❌ KHÔNG gửi agent, agent_type khi resume
         };
-        console.log('🔁 RESUME BODY:', JSON.stringify(body));
+
+        console.log('🔁 RESUME BODY (fixed with original message_id):', JSON.stringify(body));
         const epoch = this._bumpEpoch();
 
-        // Remove previous interrupt selection AND everything after it (old bot response)
-        const allMsgs = this.chatModel.getMessages();
-        const prevSelIdx = allMsgs.reduce((found, m, i) => m.isUser && m.isInterruptSelection ? i : found, -1);
-        if (prevSelIdx >= 0) {
-            allMsgs.slice(prevSelIdx).forEach(m => this.chatModel.removeMessage(m.id));
-        }
-
-        const selectionText =
-            extractInterruptAnswerText(resumePayload) ||
-            (resumePayload.action === 'approve' ? 'Đồng ý' :
-                resumePayload.action === 'reject' ? 'Từ chối' :
-                    resumePayload.action === 'retry' ? 'Thử lại' :
-                        resumePayload.action === 'skip' ? 'Bỏ qua' :
-                            resumePayload.action === 'abort' ? 'Hủy' : null);
-        if (selectionText) {
-            this.chatModel.addMessage({ text: selectionText, isUser: true, isInterruptSelection: true });
-            this._saveConversationToCache();
-            onMessagesUpdate?.();
-        }
-
-        // Mark interrupt messages as answered so the UI locks immediately
-        const answeredInterruptIds = [];
-        for (const im of this.chatModel.getMessages().filter(m => m.isInterruptMessage)) {
-            this.chatModel.updateMessage(im.id, { meta: { ...im.meta, answered: true } });
-            answeredInterruptIds.push(im.id);
-        }
-
-        const allMsgsBeforeStream = this.chatModel.getMessages();
-        this._resumeInterruptContext = {
-            interruptMsgs: allMsgsBeforeStream.filter(m => m.isInterruptMessage).map(m => ({ ...m })),
-            selectionMsg: selectionText
-                ? (() => { const m = [...allMsgsBeforeStream].reverse().find(m => m.isUser && m.text === selectionText); return m ? { ...m } : null; })()
-                : null,
-        };
-
-        // Show placeholder so user sees the bot is thinking
         this._ensureStreamingPlaceholder();
         onMessagesUpdate?.();
 
@@ -1271,7 +1269,7 @@ class ChatController {
             await this._streamAgent({
                 epoch,
                 token,
-                body,
+                body,  // ✅ Dùng body đã fix
                 onMessagesUpdate,
                 allowReconnect: true,
                 onSnapshot: (list) => {
@@ -1286,42 +1284,24 @@ class ChatController {
             });
 
             this._finalizeStreamingState(onMessagesUpdate);
-
-            // Re-apply answered flag in case MESSAGES_SNAPSHOT rebuilt messages without it
-            for (const id of answeredInterruptIds) {
-                const msg = this.chatModel.getMessages().find(m => m.id === id);
-                if (msg && !msg.meta?.answered) {
-                    this.chatModel.updateMessage(id, { meta: { ...msg.meta, answered: true } });
-                }
-            }
             this._saveConversationToCache();
+            this._originalMessageId = null;
+            this._lastOutboundMessageId = null;
 
-            // If server never confirmed the answer and there's no new bot response, restore interrupt
-            if (!this._hitlAnswerReceived && !this.pendingInterrupt) {
-                const msgs = this.chatModel.getMessages();
-                const selIdx = msgs.findIndex(m => m.isUser && m.isInterruptSelection);
-                const hasBotResponseAfter = selIdx >= 0
-                    ? msgs.slice(selIdx + 1).some(m => !m.isUser && `${m.text || ''}`.trim())
-                    : msgs.some(m => !m.isUser && !m.isInterruptMessage && `${m.text || ''}`.trim());
-                if (!hasBotResponseAfter) {
-                    console.log('⚠️ Resume: no bot response received, restoring interrupt for retry');
-                    this.pendingInterrupt = intr;
-                    onMessagesUpdate?.();
-                }
+            if (this.conversationId) {
+                // ✅ KHÔNG CẦN MERGE LẠI ở đây - _mergeInterruptIntoSnapshot đã handle trong onSnapshot
+                // Chỉ fetch để update conversation state từ server
+                await this.fetchConversationHistory(this.conversationId, onMessagesUpdate);
+                const cleanedRows = this._cleanupAnsweredInterrupts(this.chatModel.getMessages(), { persist: true });
+                this.chatModel.clearMessages();
+                cleanedRows.forEach((r) => this.chatModel.addMessage(r));
+                this._applyInterruptStateFromRows(cleanedRows);
+                onMessagesUpdate?.();
             }
         } catch (e) {
             this._finalizeStreamingState(onMessagesUpdate);
             if (e.message !== 'Aborted') {
                 if (!this.pendingInterrupt) this.pendingInterrupt = intr;
-                // Restore interrupt messages to interactive so user can retry
-                for (const id of answeredInterruptIds) {
-                    const msg = this.chatModel.getMessages().find(m => m.id === id);
-                    if (msg) {
-                        const newMeta = { ...msg.meta };
-                        delete newMeta.answered;
-                        this.chatModel.updateMessage(id, { meta: newMeta });
-                    }
-                }
                 this.chatModel.addMessage({
                     text: `❌ Có lỗi khi gửi câu trả lời: ${e.message}. Vui lòng thử lại.`,
                     isUser: false,
@@ -1336,7 +1316,6 @@ class ChatController {
 
         return { messages: this.chatModel.getMessages() };
     }
-
     pruneAfterInterruptSelection() {
         const msgs = this.chatModel.getMessages();
         const prevSelIdx = msgs.reduce((found, m, i) => m.isUser && m.isInterruptSelection ? i : found, -1);
@@ -1381,6 +1360,10 @@ class ChatController {
         const epoch = this._bumpEpoch();
 
         try {
+            // ✅ LƯU SAVED INTERRUPTS TỪ CHATMODEL HIỆN TẠI TRƯỚC KHI CLEAR
+            const savedInterrupts = this.chatModel.getMessages()
+                .filter(m => m.isInterruptMessage && m.meta?.selectedInterrupt);
+
             await this._streamAgent({
                 epoch,
                 token,
@@ -1390,7 +1373,33 @@ class ChatController {
                 allowReconnect: false,
                 onSnapshot: (list) => {
                     if (list && list.length > 0) {
-                        const rows = mapSnapshotToChatRows(list);
+                        let rows = mapSnapshotToChatRows(list);
+
+                        // ✅ MERGE SAVED INTERRUPTS VÀO SNAPSHOT (chỉ merge, không add duplicate)
+                        if (savedInterrupts.length > 0) {
+                            for (const savedMsg of savedInterrupts) {
+                                const existingIdx = rows.findIndex(r => {
+                                    // Match by ID
+                                    if (r.id === savedMsg.id) return true;
+                                    // Match by interrupt_id
+                                    if (r.meta?.interruptData?.id && savedMsg.meta?.interruptData?.id &&
+                                        r.meta.interruptData.id === savedMsg.meta.interruptData.id) return true;
+                                    // Match by question text
+                                    if (r.text && savedMsg.text && r.text.trim() === savedMsg.text.trim()) return true;
+                                    return false;
+                                });
+                                if (existingIdx >= 0) {
+                                    rows[existingIdx].meta = {
+                                        ...rows[existingIdx].meta,
+                                        selectedInterrupt: savedMsg.meta.selectedInterrupt,
+                                        interruptData: savedMsg.meta.interruptData || rows[existingIdx].meta?.interruptData,
+                                    };
+                                    rows[existingIdx].isInterruptMessage = true;
+                                }
+                                // ❌ KHÔNG add message mới vào rows
+                            }
+                        }
+
                         this.chatModel.clearMessages();
                         rows.forEach((r) => this.chatModel.addMessage(r));
                         this._applyInterruptStateFromRows(rows);
@@ -1503,7 +1512,11 @@ class ChatController {
 
             case 'RUN_FINISHED': {
                 bg.finished = true;
-                if (ev.outcome === 'interrupt') {
+                if (ev.outcome === 'interrupt' && ev.interrupt) {
+                    if (ev.interrupt.original_message_id) {
+                        this._originalMessageId = ev.interrupt.original_message_id;
+                        console.log('📝 Saved original_message_id from RUN_FINISHED:', this._originalMessageId);
+                    }
                     if (bg.currentAssistantId) {
                         const cur = bg.chatModel.getMessages().find(m => m.id === bg.currentAssistantId);
                         if (cur && `${cur.text || ''}`.trim()) {
@@ -1551,7 +1564,7 @@ class ChatController {
                                 chatModelRef.updateMessage(lastId, { meta: { ...(cur.meta || {}), citations: citData } });
                                 this._saveBgConversationToCache(bgRef);
                             })
-                            .catch(() => {});
+                            .catch(() => { });
                     }
                 }
                 this._saveBgConversationToCache(bg);
@@ -1596,19 +1609,11 @@ class ChatController {
     }
 
     startNewConversation() {
-        if (this._streamAbort && this._runActive) {
-            // Move the active stream to background instead of aborting it
-            this._bgStreams.set(this._epoch, {
-                chatModel: this.chatModel,
-                conversationId: this.conversationId,
-                runId: this.runId,
-                pendingInterrupt: this.pendingInterrupt,
-                abortController: this._streamAbort,
-                currentAssistantId: this._currentAssistantId,
-                finished: false,
-            });
-            this._streamAbort = null; // detach — do NOT abort
-        } else if (this._streamAbort) {
+        for (const [, bg] of this._bgStreams) {
+            bg.abortController?.abort();
+        }
+        this._bgStreams.clear();
+        if (this._streamAbort) {
             this._streamAbort.abort();
             this._streamAbort = null;
         }
@@ -1617,9 +1622,12 @@ class ChatController {
         this._toolCalls = new Map();
         this._resumeInterruptContext = null;
         this._clearWatchdog();
+        this._lastEventAt = 0;
         this.conversationId = null;
         this.runId = null;
         this.pendingInterrupt = null;
+        this._originalMessageId = null;
+        this._lastOutboundMessageId = null;
         this.chatModel = new ChatModel();
         this.ensureWelcomeMessage();
         return { success: true };
@@ -1693,6 +1701,8 @@ class ChatController {
         this.conversationId = null;
         this.runId = null;
         this.pendingInterrupt = null;
+        this._originalMessageId = null;
+        this._lastOutboundMessageId = null;
         this._runActive = false;
         this._currentAssistantId = null;
         this._lastEventAt = 0;

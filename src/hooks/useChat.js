@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+import { useState, useCallback, useMemo, useRef } from 'react';
 import ChatController from '../controllers/ChatController';
 
 export function useChat() {
@@ -14,8 +14,6 @@ export function useChat() {
     // reset isSending when it eventually finishes, preventing race conditions.
     const sendGenRef = useRef(0);
     const openGenRef = useRef(0);
-    const pollingRef = useRef(null);
-    const messagesHashRef = useRef(null);
     const [conversations, setConversations] = useState([]);
 
     // ✅ HÀM LỌC MESSAGE - CHỈ HIỂN THỊ KẾT QUẢ
@@ -120,100 +118,94 @@ export function useChat() {
         return filtered;
     }, [chatController, filterDisplayMessages]);
 
-    // ✅ POLLING TO SYNC APP-WEB: Detect when web makes changes
-    const startConversationPolling = useCallback(() => {
-        if (pollingRef.current) clearInterval(pollingRef.current);
-
-        pollingRef.current = setInterval(async () => {
-            const conversationId = chatController.conversationId;
-            if (!conversationId || isSending) return;
-
-            try {
-                // Fetch latest conversation history
-                await chatController.fetchConversationHistory(conversationId, () => {
-                    // Silent update - no UI flashing
-                });
-
-                // Check if messages changed
-                const currentMessages = chatController.getMessages();
-                const currentHash = JSON.stringify(
-                    currentMessages.map(m => ({ id: m.id, text: m.text, meta: m.meta }))
-                );
-
-                if (messagesHashRef.current !== currentHash) {
-                    messagesHashRef.current = currentHash;
-                    updateFilteredMessages();
-                    setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
-                }
-            } catch (error) {
-                console.log('Polling sync error (silent):', error.message);
-            }
-        }, 3000); // Poll every 3 seconds
-    }, [isSending, updateFilteredMessages, chatController]);
-
-    const stopConversationPolling = useCallback(() => {
-        if (pollingRef.current) {
-            clearInterval(pollingRef.current);
-            pollingRef.current = null;
-        }
-    }, []);
+    const normalizeInterruptSelectionValue = (value) =>
+        `${value || ''}`.replace(/^[A-Z]\s*:\s*/, '').trim();
 
     const toInterruptPayload = (interrupt, input) => {
         const normalizedInput =
             typeof input === 'string'
-                ? { displayText: `${input || ''}`.trim(), selected: [], custom: `${input || ''}`.trim() }
+                ? {
+                    displayText: `${input || ''}`.trim(),
+                    selected: [],
+                    custom: `${input || ''}`.trim(),
+                }
                 : {
                     displayText: `${input?.displayText || input?.custom || (input?.selected || []).join(', ') || ''}`.trim(),
-                    selected: Array.isArray(input?.selected) ? input.selected.filter(Boolean) : [],
+                    selected: Array.isArray(input?.selected)
+                        ? input.selected.map(normalizeInterruptSelectionValue).filter(Boolean)
+                        : [],
                     custom: `${input?.custom || ''}`.trim(),
                 };
+
         const reason = `${interrupt?.reason || ''}`.toLowerCase();
-        const value = normalizedInput.displayText;
+        const answerValue = normalizedInput.selected.length > 0
+            ? normalizedInput.selected.join(', ')
+            : normalizeInterruptSelectionValue(normalizedInput.displayText);
         const hasSelectedOptions = normalizedInput.selected.length > 0;
-        const selectionPayload = hasSelectedOptions
-            ? { custom: normalizedInput.custom || '', selected: normalizedInput.selected }
-            : null;
 
         switch (reason) {
             case 'human_approval':
             case 'database_modification':
             case 'multi_step_confirm': {
-                const yes = /^(yes|y|approve|đồng ý|dong y|ok|có)$/i.test(value);
-                return {
+                const yes = /^(yes|y|approve|đồng ý|dong y|ok|có)$/i.test(answerValue);
+                const payload = {
                     action: yes ? 'approve' : 'reject',
-                    ...(selectionPayload || {}),
                     tool_name: interrupt?.payload?.tool_name
                 };
+                if (answerValue) payload.answer = answerValue;
+                return payload;
             }
 
             case 'error_recovery': {
-                if (/retry|thử lại/i.test(value)) return { action: 'retry' };
-                if (/skip|bỏ qua/i.test(value)) return { action: 'skip' };
-                if (/abort|hủy|cancel|thoát/i.test(value)) return { action: 'abort' };
+                if (/retry|thử lại/i.test(answerValue)) return { action: 'retry' };
+                if (/skip|bỏ qua/i.test(answerValue)) return { action: 'skip' };
+                if (/abort|hủy|cancel|thoát/i.test(answerValue)) return { action: 'abort' };
                 return { action: 'retry' };
             }
 
             case 'upload_required': {
-                if (selectionPayload) return { answer: value, ...selectionPayload };
-                return { answer: value };
+                const answerJson = JSON.stringify({
+                    selected: [answerValue],
+                    custom: normalizedInput.custom || ''
+                });
+                return { answer: answerJson };
             }
 
-            // ✅ SỬA LẠI CASE NÀY
             case 'information_gathering': {
-                if (selectionPayload) return { answer: value, ...selectionPayload };
-                // Theo tài liệu §9.4: payload có { answer: string }
-                return { answer: value };
+                let selectedValue = [];
+                if (typeof input === 'string') {
+                    selectedValue = [input.trim()];
+                } else if (input?.selected?.length) {
+                    selectedValue = input.selected;
+                } else if (input?.displayText) {
+                    selectedValue = [input.displayText];
+                } else {
+                    selectedValue = [normalizedInput.displayText];
+                }
+
+                const answerJson = JSON.stringify({
+                    selected: selectedValue,
+                    custom: normalizedInput.custom || ''
+                });
+
+                console.log('📤 information_gathering payload:', { answer: answerJson });
+                return { answer: answerJson };
             }
 
             case 'policy_hold': {
-                if (selectionPayload) return { answer: value, ...selectionPayload };
-                return { answer: value };
+                const answerJson = JSON.stringify({
+                    selected: [answerValue],
+                    custom: normalizedInput.custom || ''
+                });
+                return { answer: answerJson };
             }
 
             default: {
-                if (selectionPayload) return { answer: value, ...selectionPayload };
-                // Fallback - dùng answer
-                return { answer: value };
+                const answerJson = JSON.stringify({
+                    selected: [answerValue],
+                    custom: normalizedInput.custom || ''
+                });
+                return { answer: answerJson };
             }
         }
     };
@@ -302,9 +294,14 @@ export function useChat() {
                     ? input.trim()
                     : `${input?.displayText || input?.custom || (input?.selected || []).join(', ') || ''}`.trim();
 
+            // ✅ LƯU THÔNG TIN INTERRUPT VÀO MESSAGE META
+            const selectedTexts = !isHistorical && typeof input === 'object' && Array.isArray(input.selected)
+                ? input.selected
+                : [];
+
             if (isHistorical) {
                 // Re-select after already getting a response: remove old result, send as new message
-                chatController.pruneAfterInterruptSelection();
+                // chatController.pruneAfterInterruptSelection();
                 updateFilteredMessages();
                 const result = await chatController.sendUserMessage(displayText, bump);
                 updateFilteredMessages();
@@ -314,6 +311,29 @@ export function useChat() {
 
             const intr = chatController.getPendingInterrupt?.() || null;
             const payload = toInterruptPayload(intr, input);
+
+            // ✅ SAVE INTERRUPT DATA TO MESSAGE BEFORE SENDING
+            if (intr) {
+                const msgs = chatController.chatModel.getMessages();
+                for (let i = msgs.length - 1; i >= 0; i--) {
+                    if (msgs[i].isInterruptMessage || (msgs[i].meta?.interruptData && msgs[i].meta.interruptData.id === intr.id)) {
+                        chatController.chatModel.updateMessage(msgs[i].id, {
+                            meta: {
+                                ...msgs[i].meta,
+                                interruptData: intr,
+                                selectedInterrupt: {
+                                    selected: selectedTexts,
+                                    text: displayText,
+                                    interrupt_id: intr.id, // ✅ LƯU INTERRUPT_ID ĐỂ MATCH SAU
+                                }
+                            }
+                        });
+                        break;
+                    }
+                }
+                updateFilteredMessages();
+            }
+
             const out = await chatController.resumeAgentInterrupt(payload, bump);
             updateFilteredMessages();
             setPendingInterrupt(chatController.getPendingInterrupt?.() || null);
@@ -330,18 +350,6 @@ export function useChat() {
         }
     };
 
-    // ✅ START/STOP POLLING when conversation changes
-    useEffect(() => {
-        const conversationId = chatController.conversationId;
-        if (conversationId) {
-            startConversationPolling();
-        } else {
-            stopConversationPolling();
-        }
-
-        return () => stopConversationPolling();
-    }, [chatController.conversationId, startConversationPolling, stopConversationPolling]);
-
     const loadConversations = async () => {
         const out = await chatController.listConversations();
         if (out.success) {
@@ -356,7 +364,6 @@ export function useChat() {
     const openConversation = async (conversationId) => {
         const gen = ++openGenRef.current;
         setIsOpeningConversation(true);
-        messagesHashRef.current = null; // ✅ Reset hash for new conversation
         try {
             const bump = () => {
                 if (openGenRef.current !== gen) return;
@@ -385,7 +392,6 @@ export function useChat() {
     const newConversation = () => {
         // Abort ongoing stream and prevent its finally from racing
         sendGenRef.current++;
-        messagesHashRef.current = null; // ✅ Reset hash for new conversation
         const out = chatController.startNewConversation();
         setIsSending(false);
         updateFilteredMessages();
