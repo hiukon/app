@@ -220,6 +220,19 @@ class AuthService {
         return { success: true };
     }
 
+    _isTokenExpired(token) {
+        try {
+            const parts = token.split('.');
+            if (parts.length !== 3) return true;
+            const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
+            if (!payload.exp) return false;
+            // Add 30s buffer so we refresh slightly before actual expiry
+            return Date.now() / 1000 >= payload.exp - 30;
+        } catch {
+            return true;
+        }
+    }
+
     async bootstrapSession() {
         try {
             let raw = null;
@@ -231,10 +244,26 @@ class AuthService {
             if (!raw) raw = await AsyncStorage.getItem(this._sessionKey);
             if (!raw) return { success: false };
             const data = JSON.parse(raw);
-            if (data?.accessToken) apiClient.setAuthToken(data.accessToken);
-            this._refreshToken = data?.refreshToken || null;
-            this._currentUser = data?.user || null;
-            if (!data?.accessToken || !this._currentUser) return { success: false };
+            if (!data?.accessToken || !data?.user) return { success: false };
+
+            this._refreshToken = data.refreshToken || null;
+            this._currentUser = data.user;
+
+            // If access token is expired, try to refresh before restoring session
+            if (this._isTokenExpired(data.accessToken)) {
+                const refreshed = await this.refreshAccessToken();
+                if (!refreshed.success) {
+                    await this._clearSessionStorage();
+                    this._currentUser = null;
+                    this._refreshToken = null;
+                    return { success: false };
+                }
+                await this._saveSession();
+            } else {
+                apiClient.setAuthToken(data.accessToken);
+            }
+
+            if (!apiClient.getAuthToken()) return { success: false };
             return { success: true, data: this._currentUser };
         } catch {
             return { success: false };

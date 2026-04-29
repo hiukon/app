@@ -6,12 +6,11 @@ const AuthContext = createContext();
 
 export function AuthProvider({ children }) {
     const [user, setUser] = useState(null);
-    const [isLoading, setIsLoading] = useState(false);
+    const [isLoading, setIsLoading] = useState(true);
 
     useEffect(() => {
         let mounted = true;
         (async () => {
-            setIsLoading(true);
             const res = await AuthService.bootstrapSession();
             // Only set user if bootstrap succeeded AND token is actually in memory
             if (mounted && res.success && res.data && apiClient.getAuthToken()) {
