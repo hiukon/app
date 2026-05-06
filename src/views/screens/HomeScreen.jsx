@@ -258,10 +258,8 @@ export default function HomeScreen() {
                     <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
                 }
                 showsVerticalScrollIndicator={false}
-                contentContainerStyle={{ paddingBottom: scale(130) }}
-            >
+                contentContainerStyle={{ paddingBottom: scale(130) }}>
                 <Header />
-
                 <CarouselSlide />
 
                 <View style={{ marginTop: scale(12) }}>

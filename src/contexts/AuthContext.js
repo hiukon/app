@@ -1,6 +1,7 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import AuthService from '../services/AuthService';
 import apiClient from '../services/api/apiClient';
+import ConnectorService from '../services/connector/ConnectorService';
 
 const AuthContext = createContext();
 
@@ -47,6 +48,7 @@ export function AuthProvider({ children }) {
     };
 
     const logout = async () => {
+        ConnectorService.clearCache();
         await AuthService.logout();
         setUser(null);
     };

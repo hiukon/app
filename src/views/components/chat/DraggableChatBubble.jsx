@@ -39,7 +39,6 @@ export default function DraggableChatBubble() {
         isSending, isOpeningConversation, pendingInterrupt, answerInterrupt,
         conversations, loadConversations, openConversation, deleteConversation, newConversation,
     } = useChat();
-
     // ── TTS ──────────────────────────────────────────────────────────────────
     const { speakingMessageId, speakMessage, stopSpeaking } = useTTS();
 
@@ -71,7 +70,7 @@ export default function DraggableChatBubble() {
     const [openingConversationId, setOpeningConversationId] = useState(null);
     const [keyboardHeight, setKeyboardHeight] = useState(0);
 
-    // ── Suggestion state ──────────────────────────────────────────────────────
+    // ── Suggestion state ──
     const [showSuggestion, setShowSuggestion] = useState(false);
     const [suggestionType, setSuggestionType] = useState(null);
     const [suggestionData, setSuggestionData] = useState([]);
@@ -139,7 +138,7 @@ export default function DraggableChatBubble() {
         return Number.isNaN(date.getTime()) ? '' : date.toLocaleTimeString();
     }, []);
 
-    // ── History ───────────────────────────────────────────────────────────────
+    // ── History ───
     const sortedConversations = [...conversations].sort((a, b) =>
         `${b?.updated_at || b?.created_at || ''}`.localeCompare(`${a?.updated_at || a?.created_at || ''}`)
     );
@@ -521,11 +520,10 @@ export default function DraggableChatBubble() {
                         selectedModel={selectedModel}
                         onSelectModel={setSelectedModel}
                         onClose={() => {
-                            Keyboard.dismiss(); // Thêm dòng này để ẩn bàn phím trước
+                            Keyboard.dismiss();
                             setShowModelPicker(false);
                         }}
                     />
-
                     <CitationModal citationModal={citationModal} onClose={() => setCitationModal(null)} />
                 </ImageBackground>
             </Modal>

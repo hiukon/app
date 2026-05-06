@@ -31,10 +31,6 @@ function currentMonthKey() {
     return `${y}${m}`;
 }
 
-function resolveQueryTemplate(sql) {
-    return resolveQueryTemplateWithParams(sql, {});
-}
-
 function resolveQueryTemplateWithParams(sql, params = {}) {
     const q = String(sql || '');
     let out = q
@@ -56,43 +52,81 @@ function resolveQueryTemplateWithParams(sql, params = {}) {
 }
 
 class ConnectorService {
+    constructor() {
+        this._cachedConnectorId = null;
+    }
+
+    // Fetch the first active connector for the logged-in user's partner.
+    async _discoverConnectorId() {
+        const token = apiClient.getAuthToken();
+        if (!token) return null;
+        try {
+            const res = await fetch(`${coreBaseUrl()}/api/v1/connectors`, {
+                headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+            });
+            const json = await res.json().catch(() => ({}));
+            if (json.code === 200 && Array.isArray(json.data) && json.data.length > 0) {
+                const active = json.data.find((c) => c.status === 'active') || json.data[0];
+                return active.id || null;
+            }
+        } catch {
+            // ignore, fall back to config
+        }
+        return null;
+    }
+
+    // Returns the connector ID to use: cached discovery > config fallback.
+    async _resolveConnectorId(preferredId) {
+        // Caller explicitly passed a non-default ID — use it directly.
+        if (preferredId && preferredId !== CONNECTOR_ID) return preferredId;
+
+        if (this._cachedConnectorId) return this._cachedConnectorId;
+
+        const discovered = await this._discoverConnectorId();
+        if (discovered) {
+            this._cachedConnectorId = discovered;
+            return discovered;
+        }
+
+        // Fall back to .env value
+        return preferredId || CONNECTOR_ID;
+    }
+
+    clearCache() {
+        this._cachedConnectorId = null;
+    }
+
     /**
      * POST {CORE_API_URL}/api/v1/connector/{connector_id}/query
-     * Body: { query: "<sql>" }
-     * Nếu 401/403 hoặc lỗi token: thử refresh (§2.2) rồi gọi lại tối đa 1 lần.
+     * Auto-discovers the connector for the current user if needed.
      */
     async query(sql, connectorId = CONNECTOR_ID, params = {}) {
-        if (!connectorId) throw new Error('Missing CONNECTOR_ID');
         if (!sql || !String(sql).trim()) throw new Error('Missing SQL query');
 
-        // Ensure token is available before querying
         let token = apiClient.getAuthToken();
         if (!token) {
-            // Attempt to bootstrap session from storage
-            await AuthService.bootstrapSession().catch(() => {
-                // ignore bootstrap errors, will check token below
-            });
+            await AuthService.bootstrapSession().catch(() => {});
             token = apiClient.getAuthToken();
         }
+        if (!token) throw new Error('Missing access token (login required)');
 
-        if (!token) {
-            throw new Error('Missing access token (login required)');
-        }
+        const resolvedId = await this._resolveConnectorId(connectorId);
+        if (!resolvedId) throw new Error('Missing CONNECTOR_ID');
 
         const finalQuery = resolveQueryTemplateWithParams(sql, params);
 
-        const runOnce = async () => {
+        const runOnce = async (id) => {
             const currentToken = apiClient.getAuthToken();
             if (!currentToken) throw new Error('Missing access token (login required)');
 
             const res = await fetch(
-                `${coreBaseUrl()}/api/v1/connector/${connectorId}/query`,
+                `${coreBaseUrl()}/api/v1/connector/${id}/query`,
                 {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         Accept: 'application/json',
-                        Authorization: `Bearer ${token}`,
+                        Authorization: `Bearer ${currentToken}`,
                     },
                     body: JSON.stringify({ query: finalQuery }),
                 }
@@ -103,13 +137,13 @@ class ConnectorService {
             return { res, json, errMsg };
         };
 
-        let { res, json, errMsg } = await runOnce();
+        let { res, json, errMsg } = await runOnce(resolvedId);
 
         if (!res.ok || json.code !== 200) {
             if (isLikelyAuthFailure(res.status, errMsg)) {
                 const refreshed = await AuthService.refreshAccessToken();
                 if (refreshed.success) {
-                    const second = await runOnce();
+                    const second = await runOnce(resolvedId);
                     res = second.res;
                     json = second.json;
                     errMsg = second.errMsg;
@@ -130,4 +164,3 @@ class ConnectorService {
 }
 
 export default new ConnectorService();
-
